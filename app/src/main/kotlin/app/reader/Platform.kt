@@ -63,9 +63,23 @@ fun zipEntries(entries: List<Pair<String, ByteArray>>): ByteArray {
     return bos.toByteArray()
 }
 
-/** Decodes a PNG/JPEG/GIF/WebP picture, or null when it can't be read. */
-fun decodePicture(bytes: ByteArray): ImageBitmap? =
-    runCatching { BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap() }.getOrNull()
+/**
+ * Decodes a PNG/JPEG/GIF/WebP picture, or null when it can't be read. With [maxSide] the picture is
+ * subsampled (by powers of two) so neither side is much larger than that: a 3000 px cover shown at
+ * 150 dp would otherwise cost tens of MB and a slow texture upload.
+ */
+fun decodePicture(bytes: ByteArray, maxSide: Int = 0): ImageBitmap? = runCatching {
+    val opts = BitmapFactory.Options()
+    if (maxSide > 0) {
+        opts.inJustDecodeBounds = true
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+        var sample = 1
+        while (maxOf(opts.outWidth, opts.outHeight) / (sample * 2) >= maxSide) sample *= 2
+        opts.inJustDecodeBounds = false
+        opts.inSampleSize = sample
+    }
+    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)?.also { it.prepareToDraw() }?.asImageBitmap()
+}.getOrNull()
 
 /** Small persistent key/value store for reader settings. */
 object SettingsStore {

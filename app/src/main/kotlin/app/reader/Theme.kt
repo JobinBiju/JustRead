@@ -95,6 +95,7 @@ object JrType {
 /** Loads the bundled reading fonts once. */
 @Composable
 fun rememberBundledFonts() {
+    if (BundledFonts.literata != null) return // built once; new families would only defeat the text caches
     val literata = FontFamily(
         Font(R.font.literata_regular, FontWeight.Normal, FontStyle.Normal),
         Font(R.font.literata_italic, FontWeight.Normal, FontStyle.Italic),

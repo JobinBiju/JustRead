@@ -81,7 +81,7 @@ class AppController(restoreLastBook: Boolean = true) {
 
     fun add(bytes: ByteArray, name: String, persist: Boolean = true, quiet: Boolean = false, knownId: String? = null): ShelfBook? = try {
         val book = EpubParser.parse(bytes, name.substringBeforeLast('.'))
-        val cover = book.coverPath?.let { p -> book.files[p]?.let { decodePicture(it) } }
+        val cover = book.coverPath?.let { p -> book.files[p]?.let { decodePicture(it, maxSide = 900) } }
         val id = knownId ?: if (persist) storeId(bytes) else null
         val entry = ShelfBook(book, cover, id)
         shelf.removeAll { it.key == entry.key }

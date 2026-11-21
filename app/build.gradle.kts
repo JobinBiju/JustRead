@@ -34,7 +34,10 @@ android {
         release {
             // the release key when one is configured, else the local debug key so the APK still installs for testing
             signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
-            isMinifyEnabled = false
+            // R8 makes Compose markedly faster (inlining, dead lambdas, no debug checks) and the APK smaller
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
     splits {
@@ -58,4 +61,6 @@ dependencies {
     implementation("androidx.compose.foundation:foundation:1.12.1")
     implementation("androidx.compose.ui:ui:1.12.1")
     implementation("androidx.compose.material3:material3:1.4.0")
+    // installs the baseline profiles Compose ships, so sideloaded APKs run precompiled code instead of the interpreter
+    implementation("androidx.profileinstaller:profileinstaller:1.4.1")
 }

@@ -80,6 +80,7 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -148,7 +149,7 @@ fun ReaderScreen(controller: AppController, shelf: ShelfBook, uiDark: Boolean, o
         }
         val layoutKey = listOf(w, h, density.density, insetTop, insetBottom, settings.layoutKey())
 
-        fun picture(p: String): ImageBitmap? = pictureCache.getOrPut(p) { book.files[p]?.let { decodePicture(it) } }
+        fun picture(p: String): ImageBitmap? = pictureCache.getOrPut(p) { book.files[p]?.let { decodePicture(it, maxSide = 2048) } }
         fun paginate(): Pagination {
             val m = TextMeasurer(fontResolver, Density(density.density, 1f), LayoutDirection.Ltr, 0)
             return Paginator(book, spec, m) { picture(it) }.run()
@@ -373,7 +374,10 @@ fun ReaderScreen(controller: AppController, shelf: ShelfBook, uiDark: Boolean, o
                     val edge = if (turn.slide < 0) w + turn.slide else turn.slide
                     drawLine(colors.secondary.copy(alpha = 0.25f), Offset(edge, 0f), Offset(edge, size.height), 1f)
                 } else {
-                    drawPage(pages[index], pg.spec, colors, measurer, book.title, "${index + 1}")
+                    // the pre-rendered page is a single GPU texture; fall back to drawing the text
+                    val ready = bitmaps[index]
+                    if (ready != null) drawImage(ready)
+                    else drawPage(pages[index], pg.spec, colors, measurer, book.title, "${index + 1}")
                     if (guide >= 0f) {
                         // line guide: everything outside a three-line band fades back
                         val band = lineH * 1.6f
@@ -440,7 +444,8 @@ fun tocRows(book: EpubBook, pg: Pagination): List<TocRow> {
 private fun OpeningScreen(shelf: ShelfBook, page: Int?) {
     val jr = LocalJr.current
     val t = rememberInfiniteTransition()
-    val x by t.animateFloat(0f, 1f, infiniteRepeatable(tween(1100, easing = LinearEasing), RepeatMode.Restart))
+    val progress = t.animateFloat(0f, 1f, infiniteRepeatable(tween(1100, easing = LinearEasing), RepeatMode.Restart))
+    val x = { progress.value }
     Box(Modifier.fillMaxSize().background(jr.background), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             BookCover(shelf, Modifier.size(200.dp, 300.dp), corner = 6.dp)
@@ -450,7 +455,8 @@ private fun OpeningScreen(shelf: ShelfBook, page: Int?) {
             if (shelf.book.author.isNotBlank()) Text(shelf.book.author, style = JrType.bodyLarge, color = jr.onVariant)
             Spacer(Modifier.height(48.dp))
             Box(Modifier.size(128.dp, 4.dp).clip(RoundedCornerShape(2.dp)).background(jr.secondaryContainer)) {
-                Box(Modifier.offset(x = (176f * x - 48f).dp).size(48.dp, 4.dp).clip(RoundedCornerShape(2.dp)).background(jr.primary))
+                // read in the layout phase, so the running bar doesn't recompose every frame
+                Box(Modifier.offset { IntOffset(((176f * x() - 48f) * density).roundToInt(), 0) }.size(48.dp, 4.dp).clip(RoundedCornerShape(2.dp)).background(jr.primary))
             }
             Spacer(Modifier.height(12.dp))
             Text(if (page != null) "Opening at page $page" else "Opening", style = JrType.caption, color = jr.onVariant)

@@ -3,6 +3,7 @@ package app.reader.android
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
@@ -31,6 +32,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        requestHighestRefreshRate()
         SettingsStore.init(applicationContext)
         app.reader.BookStore.init(applicationContext)
         controller = AppController()
@@ -66,6 +68,22 @@ class MainActivity : ComponentActivity() {
             Box(Modifier.fillMaxSize().background(bg)) {
                 App(controller, systemDark = systemDark)
             }
+        }
+    }
+
+    /**
+     * Asks for the display's fastest mode at the current resolution (90/120/144 Hz panels). Many phones
+     * keep apps at 60 Hz unless the window asks; adaptive panels still drop the rate when nothing moves.
+     */
+    @Suppress("DEPRECATION")
+    private fun requestHighestRefreshRate() {
+        val display = (if (Build.VERSION.SDK_INT >= 30) display else windowManager.defaultDisplay) ?: return
+        val current = display.mode
+        val best = display.supportedModes
+            .filter { it.physicalWidth == current.physicalWidth && it.physicalHeight == current.physicalHeight }
+            .maxByOrNull { it.refreshRate } ?: return
+        if (best.modeId != window.attributes.preferredDisplayModeId) {
+            window.attributes = window.attributes.also { it.preferredDisplayModeId = best.modeId }
         }
     }
 

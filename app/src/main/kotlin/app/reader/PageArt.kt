@@ -1,10 +1,13 @@
 package app.reader
 
+import android.graphics.Bitmap
+import android.os.Build
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Canvas
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.CanvasDrawScope
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.clipRect
@@ -69,9 +72,22 @@ fun DrawScope.drawColumns(page: Page, spec: PageSpec, colors: ThemeColors, top: 
     }
 }
 
-/** Paints into an offscreen picture, used for the curl and slide turns. */
+/**
+ * Paints into an offscreen picture, used for the curl and slide turns. From Android 9 the drawing is
+ * recorded and rasterised on the GPU into a hardware bitmap: no CPU text rendering on the main thread
+ * and no texture upload when the picture is first drawn. Older versions paint a software bitmap.
+ */
 fun renderToBitmap(width: Int, height: Int, density: Density, block: DrawScope.() -> Unit): ImageBitmap {
-    val bmp = ImageBitmap(width.coerceAtLeast(1), height.coerceAtLeast(1))
-    CanvasDrawScope().draw(density, LayoutDirection.Ltr, Canvas(bmp), Size(width.toFloat(), height.toFloat()), block)
+    val w = width.coerceAtLeast(1); val h = height.coerceAtLeast(1)
+    val size = Size(w.toFloat(), h.toFloat())
+    if (Build.VERSION.SDK_INT >= 28) {
+        val picture = android.graphics.Picture()
+        val canvas = Canvas(picture.beginRecording(w, h))
+        CanvasDrawScope().draw(density, LayoutDirection.Ltr, canvas, size, block)
+        picture.endRecording()
+        runCatching { return Bitmap.createBitmap(picture, w, h, Bitmap.Config.HARDWARE).asImageBitmap() }
+    }
+    val bmp = ImageBitmap(w, h)
+    CanvasDrawScope().draw(density, LayoutDirection.Ltr, Canvas(bmp), size, block)
     return bmp
 }

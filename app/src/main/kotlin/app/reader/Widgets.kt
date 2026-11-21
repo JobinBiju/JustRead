@@ -1,5 +1,7 @@
 package app.reader
 
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
@@ -310,7 +312,8 @@ fun JrSheet(onDismiss: () -> Unit, modifier: Modifier = Modifier, fullHeightTop:
     LaunchedEffect(Unit) { offset.animateTo(0f, tween(280, easing = androidx.compose.animation.core.CubicBezierEasing(0.05f, 0.7f, 0.1f, 1f))) }
     BackAction(onBack = onDismiss)
     Box(Modifier.fillMaxSize()) {
-        Box(Modifier.fillMaxSize().background(jr.scrim.copy(alpha = jr.scrim.alpha * (1f - offset.value)))
+        // the scrim's fade is read while drawing, so the sheet isn't recomposed on every frame of it
+        Box(Modifier.fillMaxSize().drawBehind { drawRect(jr.scrim.copy(alpha = jr.scrim.alpha * (1f - offset.value))) }
             .clickable(remember { MutableInteractionSource() }, indication = null, onClick = onDismiss))
         BoxWithConstraints(Modifier.align(Alignment.BottomCenter).fillMaxWidth().widthIn(max = 640.dp)) {
             val maxH = constraints.maxHeight
@@ -394,9 +397,7 @@ fun BookCover(b: ShelfBook, modifier: Modifier, showText: Boolean = true, corner
             }
         }
         // spine shadow
-        BoxWithConstraints(Modifier.fillMaxSize()) {
-            Box(Modifier.width((maxWidth.value * 0.031f).dp).fillMaxSize().background(Color.Black.copy(alpha = 0.14f)))
-        }
+        Box(Modifier.fillMaxHeight().fillMaxWidth(0.031f).background(Color.Black.copy(alpha = 0.14f)))
     }
 }
 
