@@ -259,6 +259,9 @@ fun App(controller: AppController = remember { AppController() }, systemDark: Bo
     LaunchedEffect(reading != null, settings.brightness) {
         Hooks.setBrightness(if (reading != null && settings.brightness >= 0f) settings.brightness else null)
     }
+    LaunchedEffect(settings.appearance) {
+        Hooks.setNightMode(when (settings.appearance) { Appearance.Light -> false; Appearance.Dark -> true; else -> null })
+    }
     LaunchedEffect(reading != null, settings.lockRotation) { Hooks.lockRotation(reading != null && settings.lockRotation) }
 
     JustReadTheme(uiDark) {

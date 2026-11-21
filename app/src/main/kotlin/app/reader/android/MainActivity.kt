@@ -51,6 +51,7 @@ class MainActivity : ComponentActivity() {
         Hooks.lockRotation = { lock ->
             requestedOrientation = if (lock) ActivityInfo.SCREEN_ORIENTATION_LOCKED else ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         }
+        Hooks.setNightMode = { dark -> applyNightMode(dark) }
         Hooks.share = { text ->
             val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text)
             runCatching { startActivity(Intent.createChooser(send, null)) }
@@ -90,6 +91,22 @@ class MainActivity : ComponentActivity() {
         if (best.modeId != window.attributes.preferredDisplayModeId) {
             window.attributes = window.attributes.also { it.preferredDisplayModeId = best.modeId }
         }
+    }
+
+    /**
+     * Android 12+ draws the launch screen before any app code runs, in the app's night mode. Recording
+     * the in-app Appearance there makes the next launch screen light or dark to match the app.
+     */
+    private fun applyNightMode(dark: Boolean?) {
+        if (Build.VERSION.SDK_INT < 31) return
+        val mode = when (dark) {
+            true -> android.app.UiModeManager.MODE_NIGHT_YES
+            false -> android.app.UiModeManager.MODE_NIGHT_NO
+            null -> android.app.UiModeManager.MODE_NIGHT_AUTO
+        }
+        if (SettingsStore.get("nightMode") == mode.toString()) return
+        getSystemService(android.app.UiModeManager::class.java)?.setApplicationNightMode(mode)
+        SettingsStore.put("nightMode", mode.toString())
     }
 
     override fun onNewIntent(intent: Intent) {

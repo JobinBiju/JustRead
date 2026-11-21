@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      Android 12+ draws its own launch screen, in the app's night mode (set from the in-app Appearance).
+      The icon is named here so it resolves in that mode too; left to the default, the system uses the
+      launcher icon resolved in the phone's mode, which can differ.
+    -->
+    <style name="Theme.JustRead" parent="Base.JustRead">
+        <item name="android:windowSplashScreenBackground">@color/window_background</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+        <item name="android:windowSplashScreenIconBackgroundColor">@color/ic_launcher_background</item>
+    </style>
+</resources>

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- the library's background (LightJr.background), shown while the app starts -->
+    <color name="window_background">#F9F2E5</color>
+</resources>
