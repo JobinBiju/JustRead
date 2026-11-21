@@ -46,6 +46,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -110,11 +111,10 @@ private class Turn {
 class TocRow(val title: String, val level: Int, val page: Int)
 
 @Composable
-fun ReaderScreen(controller: AppController, shelf: ShelfBook, uiDark: Boolean, onClose: () -> Unit) {
+fun ReaderScreen(controller: AppController, shelf: ShelfBook, book: EpubBook, uiDark: Boolean, onClose: () -> Unit) {
     val settings = controller.settings
     val colors = settings.theme.colors(uiDark)
     val pageDark = settings.isDark(uiDark)
-    val book = shelf.book
     val density = LocalDensity.current
     val fontResolver = LocalFontFamilyResolver.current
     val measurer = rememberTextMeasurer()
@@ -125,7 +125,8 @@ fun ReaderScreen(controller: AppController, shelf: ShelfBook, uiDark: Boolean, o
     var panel by remember { mutableStateOf<Panel?>(null) }
     var note by remember { mutableStateOf<String?>(null) }
     var guideY by remember { mutableStateOf(-1f) }
-    val pictureCache = remember(book) { HashMap<String, ImageBitmap?>() }
+    val pictureCache = remember(book) { PictureCache(book.files) }
+    DisposableEffect(pictureCache) { onDispose { pictureCache.clear() } }
     val focus = remember { FocusRequester() }
     val turn = remember { Turn() }
 
@@ -149,10 +150,12 @@ fun ReaderScreen(controller: AppController, shelf: ShelfBook, uiDark: Boolean, o
         }
         val layoutKey = listOf(w, h, density.density, insetTop, insetBottom, settings.layoutKey())
 
-        fun picture(p: String): ImageBitmap? = pictureCache.getOrPut(p) { book.files[p]?.let { decodePicture(it, maxSide = 2048) } }
+        val sizes = remember(book) { HashMap<String, androidx.compose.ui.unit.IntSize?>() }
+        fun pictureSize(p: String) = synchronized(sizes) { sizes.getOrPut(p) { book.files[p]?.let { pictureSize(it) } } }
+        val picture: (String) -> ImageBitmap? = { pictureCache[it] }
         fun paginate(): Pagination {
             val m = TextMeasurer(fontResolver, Density(density.density, 1f), LayoutDirection.Ltr, 0)
-            return Paginator(book, spec, m) { picture(it) }.run()
+            return Paginator(book, spec, m) { pictureSize(it) }.run()
         }
 
         var pagination by remember(book) { mutableStateOf<Pagination?>(null) }
@@ -176,7 +179,7 @@ fun ReaderScreen(controller: AppController, shelf: ShelfBook, uiDark: Boolean, o
         fun bitmap(i: Int): ImageBitmap = bitmaps.getOrPut(i) {
             if (bitmaps.size > 5) bitmaps.keys.filter { abs(it - i) > 2 }.forEach { bitmaps.remove(it) }
             renderToBitmap(w.toInt(), h.toInt(), density) {
-                drawPage(pages[i], pg.spec, colors, measurer, book.title, "${i + 1}")
+                drawPage(pages[i], pg.spec, colors, measurer, book.title, "${i + 1}", picture)
             }
         }
         fun goTo(i: Int) {
@@ -283,7 +286,7 @@ fun ReaderScreen(controller: AppController, shelf: ShelfBook, uiDark: Boolean, o
         val guide = if (settings.lineGuide) (if (guideY < 0f) h * 0.42f else guideY) else -1f
 
         if (settings.pageTurn == PageTurn.Scroll) {
-            ScrollReader(pages, pg, colors, index, readerModifier, onTap = { chrome = !chrome }) { i -> goTo(i) }
+            ScrollReader(pages, pg, colors, index, picture, readerModifier, onTap = { chrome = !chrome }) { i -> goTo(i) }
         } else {
             Canvas(readerModifier
                 .clipToBounds()
@@ -377,7 +380,7 @@ fun ReaderScreen(controller: AppController, shelf: ShelfBook, uiDark: Boolean, o
                     // the pre-rendered page is a single GPU texture; fall back to drawing the text
                     val ready = bitmaps[index]
                     if (ready != null) drawImage(ready)
-                    else drawPage(pages[index], pg.spec, colors, measurer, book.title, "${index + 1}")
+                    else drawPage(pages[index], pg.spec, colors, measurer, book.title, "${index + 1}", picture)
                     if (guide >= 0f) {
                         // line guide: everything outside a three-line band fades back
                         val band = lineH * 1.6f
@@ -412,7 +415,7 @@ fun ReaderScreen(controller: AppController, shelf: ShelfBook, uiDark: Boolean, o
             Panel.Customise -> CustomiseScreen(settings, colors, onChange = { controller.updateSettings(it) },
                 onFonts = { panel = Panel.Fonts }, onDone = { panel = Panel.Themes })
             Panel.Fonts -> FontScreen(settings, onChange = { controller.updateSettings(it) }, onBack = { panel = Panel.Customise })
-            Panel.Contents -> ContentsSheet(shelf, controller, pg, toc, index,
+            Panel.Contents -> ContentsSheet(shelf, book, controller, pg, toc, index,
                 onPick = { goTo(it); panel = null; chrome = false },
                 onPickLocator = { goToLocator(it); panel = null; chrome = false },
                 onDismiss = { panel = null })
@@ -441,7 +444,7 @@ fun tocRows(book: EpubBook, pg: Pagination): List<TocRow> {
 }
 
 @Composable
-private fun OpeningScreen(shelf: ShelfBook, page: Int?) {
+fun OpeningScreen(shelf: ShelfBook, page: Int?) {
     val jr = LocalJr.current
     val t = rememberInfiniteTransition()
     val progress = t.animateFloat(0f, 1f, infiniteRepeatable(tween(1100, easing = LinearEasing), RepeatMode.Restart))
@@ -450,9 +453,9 @@ private fun OpeningScreen(shelf: ShelfBook, page: Int?) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             BookCover(shelf, Modifier.size(200.dp, 300.dp), corner = 6.dp)
             Spacer(Modifier.height(36.dp))
-            Text(shelf.book.title, style = JrType.serif(24, 32), color = jr.onBackground, maxLines = 2, overflow = TextOverflow.Ellipsis,
+            Text(shelf.title, style = JrType.serif(24, 32), color = jr.onBackground, maxLines = 2, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.padding(horizontal = 32.dp))
-            if (shelf.book.author.isNotBlank()) Text(shelf.book.author, style = JrType.bodyLarge, color = jr.onVariant)
+            if (shelf.author.isNotBlank()) Text(shelf.author, style = JrType.bodyLarge, color = jr.onVariant)
             Spacer(Modifier.height(48.dp))
             Box(Modifier.size(128.dp, 4.dp).clip(RoundedCornerShape(2.dp)).background(jr.secondaryContainer)) {
                 // read in the layout phase, so the running bar doesn't recompose every frame
@@ -466,7 +469,7 @@ private fun OpeningScreen(shelf: ShelfBook, page: Int?) {
 
 @Composable
 private fun ScrollReader(
-    pages: List<Page>, pg: Pagination, colors: ThemeColors, index: Int,
+    pages: List<Page>, pg: Pagination, colors: ThemeColors, index: Int, pictures: (String) -> ImageBitmap?,
     modifier: Modifier, onTap: () -> Unit, onVisible: (Int) -> Unit,
 ) {
     val state = rememberLazyListState(initialFirstVisibleItemIndex = index)
@@ -481,7 +484,7 @@ private fun ScrollReader(
                     Box(Modifier.width(60.dp).height(1.dp).background(colors.secondary.copy(alpha = 0.4f)))
                 }
             }
-            Canvas(Modifier.fillMaxWidth().height(itemH)) { drawColumns(page, pg.spec, colors, pad / 2f) }
+            Canvas(Modifier.fillMaxWidth().height(itemH)) { drawColumns(page, pg.spec, colors, pad / 2f, pictures) }
         }
         item { Spacer(Modifier.height(80.dp)) }
     }

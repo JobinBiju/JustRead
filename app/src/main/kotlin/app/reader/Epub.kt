@@ -55,60 +55,38 @@ class EpubException(message: String) : Exception(message)
  * Reads an EPUB in the order the format lays it out:
  * mimetype → META-INF/container.xml → OPF (metadata, manifest, spine) → nav/NCX table of contents.
  */
+/** What the library shows for a book, read without parsing any chapter. */
+class BookSummary(val title: String, val author: String, val coverPath: String?)
+
 object EpubParser {
+    /** The package (OPF) parts both [summary] and [parse] need. */
+    private class Pkg(
+        val title: String, val author: String, val language: String, val coverPath: String?, val fixedLayout: Boolean,
+        val rtl: Boolean, val spine: List<Pair<Item, Boolean>>, val manifest: Map<String, Item>, val spineToc: String?,
+    )
+    private class Item(val id: String, val path: String, val mediaType: String, val properties: List<String>)
+
+    /**
+     * Title, author and cover path only: reads container.xml and the OPF through [read] and nothing
+     * else, so a whole library can be listed without unpacking any book.
+     */
+    fun summary(read: (String) -> ByteArray?, names: Collection<String>, fallbackTitle: String = "Untitled"): BookSummary {
+        val p = pkg(read, names, fallbackTitle)
+        return BookSummary(p.title, p.author, p.coverPath)
+    }
+
+    /** The whole book, from its bytes. */
     fun parse(bytes: ByteArray, fallbackTitle: String = "Untitled"): EpubBook {
         val files = try { unzipEntries(bytes) } catch (e: Exception) { throw EpubException("This file isn't a readable EPUB (not a ZIP archive).") }
+        return parse(files, fallbackTitle)
+    }
+
+    fun parse(files: Map<String, ByteArray>, fallbackTitle: String = "Untitled"): EpubBook {
         if (files.isEmpty()) throw EpubException("This EPUB is empty.")
-        if ("META-INF/encryption.xml" in files) {
-            val enc = Xml.parse(files.getValue("META-INF/encryption.xml"))
-            val encrypted = enc.descendants().any { it.localName == "encrypteddata" &&
-                it.descendants().none { a -> a.localName == "encryptionmethod" && (a.attr("Algorithm") ?: "").contains("obfuscation", true) } }
-            if (encrypted) throw EpubException("This book is protected with DRM and can't be opened.")
-        }
-
-        // 1-2. container.xml → rootfile full-path
-        val container = files["META-INF/container.xml"]?.let { Xml.parse(it) }
-        val opfPath = container?.descendants()
-            ?.filter { it.localName == "rootfile" }
-            ?.sortedByDescending { it.attr("media-type") == "application/oebps-package+xml" }
-            ?.firstOrNull()?.attr("full-path")
-            ?: files.keys.firstOrNull { it.endsWith(".opf", true) }
-            ?: throw EpubException("This EPUB has no package (.opf) file.")
-        val opfBytes = files[opfPath] ?: throw EpubException("The package file $opfPath is missing.")
-        val opf = Xml.parse(opfBytes)
-        val baseDir = opfPath.substringBeforeLast('/', "")
-
-        // 3. metadata
-        val metadata = opf.first("metadata")
-        val title = metadata?.descendants()?.firstOrNull { it.localName == "title" }?.text()?.trim()?.ifBlank { null } ?: fallbackTitle
-        val author = metadata?.descendants()?.firstOrNull { it.localName == "creator" }?.text()?.trim() ?: ""
-        val language = metadata?.descendants()?.firstOrNull { it.localName == "language" }?.text()?.trim() ?: "en"
-        val coverId = metadata?.descendants()?.firstOrNull { it.localName == "meta" && it.attr("name") == "cover" }?.attr("content")
-        val fixedLayout = metadata?.descendants()?.any {
-            it.localName == "meta" && it.attr("property") == "rendition:layout" && it.text().trim() == "pre-paginated"
-        } == true || files["META-INF/com.apple.ibooks.display-options.xml"]?.let { d ->
-            Xml.parse(d).descendants().any { it.localName == "option" && it.attr("name") == "fixed-layout" && it.text().trim() == "true" }
-        } == true
-
-        // 4. manifest
-        class Item(val id: String, val path: String, val mediaType: String, val properties: List<String>)
-        val manifest = LinkedHashMap<String, Item>()
-        opf.first("manifest")?.elements("item")?.forEach { e ->
-            val id = e.attr("id") ?: return@forEach
-            val href = e.attr("href") ?: return@forEach
-            manifest[id] = Item(id, resolve(baseDir, href).first, e.attr("media-type") ?: "", (e.attr("properties") ?: "").split(' '))
-        }
-        val coverPath = manifest.values.firstOrNull { "cover-image" in it.properties }?.path
-            ?: coverId?.let { manifest[it]?.path }
-
-        // 5. spine
-        val spineEl = opf.first("spine")
-        val rtl = spineEl?.attr("page-progression-direction") == "rtl"
-        val spine = spineEl?.elements("itemref")?.mapNotNull { ir ->
-            val item = manifest[ir.attr("idref") ?: return@mapNotNull null] ?: return@mapNotNull null
-            item to (ir.attr("linear") != "no")
-        } ?: emptyList()
-        if (spine.isEmpty()) throw EpubException("This EPUB has no reading order (empty spine).")
+        val p = pkg({ files[it] }, files.keys, fallbackTitle)
+        val title = p.title
+        val manifest = p.manifest
+        val spine = p.spine
 
         // 6. table of contents: EPUB 3 nav first, else NCX
         val toc = mutableListOf<TocEntry>()
@@ -116,7 +94,7 @@ object EpubParser {
             files[nav.path]?.let { readNav(Xml.parse(it), nav.path.substringBeforeLast('/', ""), toc) }
         }
         if (toc.isEmpty()) {
-            val ncxId = spineEl?.attr("toc")
+            val ncxId = p.spineToc
             val ncx = (ncxId?.let { manifest[it] } ?: manifest.values.firstOrNull { it.mediaType == "application/x-dtbncx+xml" })
             ncx?.let { item -> files[item.path]?.let { readNcx(Xml.parse(it), item.path.substringBeforeLast('/', ""), toc) } }
         }
@@ -138,7 +116,61 @@ object EpubParser {
         }.filter { it.linear } // reading order uses linear documents only
         if (chapters.isEmpty()) throw EpubException("This EPUB has no readable chapters.")
 
-        return EpubBook(title, author, language, files, chapters, toc, coverPath, rtl, fixedLayout, footnotes)
+        return EpubBook(title, p.author, p.language, files, chapters, toc, p.coverPath, p.rtl, p.fixedLayout, footnotes)
+    }
+
+    private fun pkg(read: (String) -> ByteArray?, names: Collection<String>, fallbackTitle: String): Pkg {
+        if (names.isEmpty()) throw EpubException("This EPUB is empty.")
+        read("META-INF/encryption.xml")?.let { bytes ->
+            val enc = Xml.parse(bytes)
+            val encrypted = enc.descendants().any { it.localName == "encrypteddata" &&
+                it.descendants().none { a -> a.localName == "encryptionmethod" && (a.attr("Algorithm") ?: "").contains("obfuscation", true) } }
+            if (encrypted) throw EpubException("This book is protected with DRM and can't be opened.")
+        }
+
+        // 1-2. container.xml → rootfile full-path
+        val container = read("META-INF/container.xml")?.let { Xml.parse(it) }
+        val opfPath = container?.descendants()
+            ?.filter { it.localName == "rootfile" }
+            ?.sortedByDescending { it.attr("media-type") == "application/oebps-package+xml" }
+            ?.firstOrNull()?.attr("full-path")
+            ?: names.firstOrNull { it.endsWith(".opf", true) }
+            ?: throw EpubException("This EPUB has no package (.opf) file.")
+        val opfBytes = read(opfPath) ?: throw EpubException("The package file $opfPath is missing.")
+        val opf = Xml.parse(opfBytes)
+        val baseDir = opfPath.substringBeforeLast('/', "")
+
+        // 3. metadata
+        val metadata = opf.first("metadata")
+        val title = metadata?.descendants()?.firstOrNull { it.localName == "title" }?.text()?.trim()?.ifBlank { null } ?: fallbackTitle
+        val author = metadata?.descendants()?.firstOrNull { it.localName == "creator" }?.text()?.trim() ?: ""
+        val language = metadata?.descendants()?.firstOrNull { it.localName == "language" }?.text()?.trim() ?: "en"
+        val coverId = metadata?.descendants()?.firstOrNull { it.localName == "meta" && it.attr("name") == "cover" }?.attr("content")
+        val fixedLayout = metadata?.descendants()?.any {
+            it.localName == "meta" && it.attr("property") == "rendition:layout" && it.text().trim() == "pre-paginated"
+        } == true || read("META-INF/com.apple.ibooks.display-options.xml")?.let { d ->
+            Xml.parse(d).descendants().any { it.localName == "option" && it.attr("name") == "fixed-layout" && it.text().trim() == "true" }
+        } == true
+
+        // 4. manifest
+        val manifest = LinkedHashMap<String, Item>()
+        opf.first("manifest")?.elements("item")?.forEach { e ->
+            val id = e.attr("id") ?: return@forEach
+            val href = e.attr("href") ?: return@forEach
+            manifest[id] = Item(id, resolve(baseDir, href).first, e.attr("media-type") ?: "", (e.attr("properties") ?: "").split(' '))
+        }
+        val coverPath = manifest.values.firstOrNull { "cover-image" in it.properties }?.path
+            ?: coverId?.let { manifest[it]?.path }
+
+        // 5. spine
+        val spineEl = opf.first("spine")
+        val rtl = spineEl?.attr("page-progression-direction") == "rtl"
+        val spine = spineEl?.elements("itemref")?.mapNotNull { ir ->
+            val item = manifest[ir.attr("idref") ?: return@mapNotNull null] ?: return@mapNotNull null
+            item to (ir.attr("linear") != "no")
+        } ?: emptyList()
+        if (spine.isEmpty()) throw EpubException("This EPUB has no reading order (empty spine).")
+        return Pkg(title, author, language, coverPath, fixedLayout, rtl, spine, manifest, spineEl?.attr("toc"))
     }
 
     /** The book's own CSS for one chapter: linked stylesheets, then <style> blocks, in document order. */

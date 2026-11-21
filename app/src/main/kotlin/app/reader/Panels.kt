@@ -286,11 +286,10 @@ fun FontScreen(settings: ReaderSettings, onChange: (ReaderSettings) -> Unit, onB
 
 @Composable
 fun ContentsSheet(
-    shelf: ShelfBook, controller: AppController, pg: Pagination, toc: List<TocRow>, current: Int,
+    shelf: ShelfBook, book: EpubBook, controller: AppController, pg: Pagination, toc: List<TocRow>, current: Int,
     onPick: (Int) -> Unit, onPickLocator: (Locator) -> Unit, onDismiss: () -> Unit,
 ) {
     val jr = LocalJr.current
-    val book = shelf.book
     var tab by remember { mutableStateOf(0) }
     var goTo by remember { mutableStateOf(false) }
     @Suppress("UNUSED_VARIABLE") val version = controller.metaVersion

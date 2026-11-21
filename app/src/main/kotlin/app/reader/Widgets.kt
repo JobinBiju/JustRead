@@ -380,7 +380,7 @@ fun BookCover(b: ShelfBook, modifier: Modifier, showText: Boolean = true, corner
     Box(modifier.shadow(3.dp, shape, ambientColor = jr.shadow, spotColor = jr.shadow).clip(shape)) {
         val img: ImageBitmap? = b.cover
         if (img != null) {
-            Image(img, contentDescription = "Cover of ${b.book.title}", contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+            Image(img, contentDescription = "Cover of ${b.title}", contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
         } else {
             val art = coverArts[(b.key.hashCode() and 0x7fffffff) % coverArts.size]
             BoxWithConstraints(Modifier.fillMaxSize().background(art.bg)) {
@@ -388,9 +388,9 @@ fun BookCover(b: ShelfBook, modifier: Modifier, showText: Boolean = true, corner
                 Canvas(Modifier.fillMaxSize()) { drawMotif(art) }
                 if (showText && w > 50f) {
                     Column(Modifier.padding((w * 0.088f).dp), verticalArrangement = Arrangement.spacedBy((w * 0.037f).dp)) {
-                        Text(b.book.title, color = art.ink, fontFamily = JrType.serifFamily, fontWeight = FontWeight.SemiBold,
+                        Text(b.title, color = art.ink, fontFamily = JrType.serifFamily, fontWeight = FontWeight.SemiBold,
                             fontSize = (w * 0.125f).sp, lineHeight = (w * 0.143f).sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
-                        if (b.book.author.isNotBlank()) Text(b.book.author.uppercase(), color = art.ink, fontWeight = FontWeight.Medium,
+                        if (b.author.isNotBlank()) Text(b.author.uppercase(), color = art.ink, fontWeight = FontWeight.Medium,
                             fontSize = (w * 0.053f).sp, lineHeight = (w * 0.075f).sp, letterSpacing = 0.08.em, maxLines = 2)
                     }
                 }

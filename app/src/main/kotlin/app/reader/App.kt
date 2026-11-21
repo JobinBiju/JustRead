@@ -13,11 +13,34 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.runtime.produceState
+import androidx.compose.ui.Modifier
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
-/** A book on the shelf. [storeId] is its saved copy (null for the built-in sample). */
-class ShelfBook(val book: EpubBook, val cover: ImageBitmap?, val storeId: String?) {
-    val key: String get() = book.title + "|" + book.author
+/**
+ * A book on the shelf: only what the library shows. [storeId] is its saved copy on disk; the built-in
+ * sample has none and keeps its (small) [bytes] instead. The chapters are parsed only while the book
+ * is open, by [load].
+ */
+class ShelfBook(val title: String, val author: String, val cover: ImageBitmap?, val storeId: String?, private val bytes: ByteArray? = null) {
+    val key: String get() = "$title|$author"
+
+    /** Parses the whole book. Slow and memory-hungry: call it off the main thread, and only for the open book. */
+    fun load(): EpubBook {
+        val files = bytes?.let { unzipEntries(it) }
+            ?: storeId?.let { BookStore.file(it) }?.let { unzipFile(it) }
+            ?: throw EpubException("This book's file is missing.")
+        return EpubParser.parse(files, title)
+    }
 }
+
+/** A message for a book that couldn't be read. */
+fun openError(e: Throwable, name: String): String =
+    if (e is EpubException) e.message.orEmpty() else "Couldn't open $name: ${e.message ?: e::class.simpleName}"
 
 /** Saved reading spot: chapter, paragraph and character. */
 data class Locator(val chapter: Int, val block: Int, val char: Int) {
@@ -32,7 +55,7 @@ data class Bookmark(val locator: Locator, val created: Long)
 enum class SortBy(val label: String) { Recent("Recently read"), Title("Title"), Author("Author"), Added("Date added"), Progress("Progress") }
 enum class ShelfView { Grid, List }
 
-class AppController(restoreLastBook: Boolean = true) {
+class AppController(private val restoreLastBook: Boolean = true) {
     val shelf = mutableStateListOf<ShelfBook>()
     val back = BackStack()
     private var readingState = mutableStateOf<ShelfBook?>(null)
@@ -62,16 +85,57 @@ class AppController(restoreLastBook: Boolean = true) {
     fun updateSort(s: SortBy) { sortBy = s; SettingsStore.put("sort", s.name) }
     fun updateView(v: ShelfView) { view = v; SettingsStore.put("view", v.name) }
 
+    /** False until [loadLibrary] has listed the saved books. */
+    var libraryLoaded by mutableStateOf(false)
+        private set
+
+    /** A book from the last session is about to be reopened (so the library isn't flashed first). */
+    val restoring: Boolean get() = !libraryLoaded && restoreLastBook && reading == null && !SettingsStore.get("lastBook").isNullOrEmpty()
+
     init {
-        runCatching { add(SampleBook.build(), SampleBook.TITLE, persist = false) }
-        // books the person added earlier, least recently used first so the newest ends up on top
-        for ((id, bytes) in BookStore.loadAll()) {
-            if (add(bytes, id, persist = false, quiet = true, knownId = id) == null) BookStore.remove(id)
+        runCatching {
+            val bytes = SampleBook.build()
+            val files = unzipEntries(bytes)
+            val sum = EpubParser.summary({ files[it] }, files.keys, SampleBook.TITLE)
+            place(ShelfBook(sum.title, sum.author, sum.coverPath?.let { files[it] }?.let { decodePicture(it, COVER_PX) }, null, bytes))
         }
-        if (restoreLastBook) {
-            val last = SettingsStore.get("lastBook")
-            shelf.firstOrNull { it.key == last }?.let { readingState.value = it }
+        if (restoreLastBook) restoreLast()
+    }
+
+    private fun restoreLast() {
+        if (reading != null) return
+        val last = SettingsStore.get("lastBook")
+        shelf.firstOrNull { it.key == last }?.let { readingState.value = it }
+    }
+
+    /**
+     * Lists the saved books off the main thread, reading only each one's package file and cover,
+     * then reopens the book from last time.
+     */
+    suspend fun loadLibrary() {
+        val found = withContext(Dispatchers.IO) {
+            BookStore.files().mapNotNull { f ->
+                val id = f.nameWithoutExtension
+                runCatching { summarise(f, id, id) }.getOrElse { BookStore.remove(id); null }
+            }
         }
+        // least recently used first, so the newest ends up on top; skip any opened meanwhile
+        for (b in found) if (shelf.none { it.key == b.key }) place(b)
+        libraryLoaded = true
+        if (restoreLastBook) restoreLast()
+    }
+
+    /** A saved book's shelf entry, from its package file and cover alone. */
+    private fun summarise(file: java.io.File, name: String, id: String): ShelfBook = withZipFile(file) { read, names ->
+        val sum = EpubParser.summary(read, names, name.substringBeforeLast('.'))
+        ShelfBook(sum.title, sum.author, sum.coverPath?.let(read)?.let { decodePicture(it, COVER_PX) }, id)
+    }
+
+    private fun place(entry: ShelfBook) {
+        shelf.removeAll { it.key == entry.key }
+        shelf.add(0, entry)
+        if (SettingsStore.get("added:" + entry.key) == null) SettingsStore.put("added:" + entry.key, nowMillis().toString())
+        touch()
     }
 
     fun updateSettings(s: ReaderSettings) {
@@ -79,24 +143,17 @@ class AppController(restoreLastBook: Boolean = true) {
         SettingsStore.put("settings", s.encode())
     }
 
-    fun add(bytes: ByteArray, name: String, persist: Boolean = true, quiet: Boolean = false, knownId: String? = null): ShelfBook? = try {
-        val book = EpubParser.parse(bytes, name.substringBeforeLast('.'))
-        val cover = book.coverPath?.let { p -> book.files[p]?.let { decodePicture(it, maxSide = 900) } }
-        val id = knownId ?: if (persist) storeId(bytes) else null
-        val entry = ShelfBook(book, cover, id)
-        shelf.removeAll { it.key == entry.key }
-        shelf.add(0, entry)
-        if (persist && id != null) BookStore.save(id, bytes)
-        if (SettingsStore.get("added:" + entry.key) == null) SettingsStore.put("added:" + entry.key, nowMillis().toString())
-        touch()
-        entry
-    } catch (e: EpubException) {
-        if (!quiet) error = e.message; null
-    } catch (e: Exception) {
-        if (!quiet) error = "Couldn't open $name: ${e.message ?: e::class.simpleName}"; null
+    /** Saves a copy of a book the person picked, adds it to the shelf and opens it. */
+    suspend fun open(bytes: ByteArray, name: String) {
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val id = storeId(bytes)
+                BookStore.save(id, bytes)
+                val file = BookStore.file(id) ?: throw EpubException("Couldn't save $name.")
+                runCatching { summarise(file, name, id) }.getOrElse { BookStore.remove(id); throw it }
+            }
+        }.onSuccess { place(it); reading = it }.onFailure { error = openError(it, name) }
     }
-
-    fun open(bytes: ByteArray, name: String) { add(bytes, name)?.let { reading = it } }
 
     fun remove(b: ShelfBook) {
         shelf.remove(b)
@@ -177,10 +234,15 @@ class AppController(restoreLastBook: Boolean = true) {
         return n
     }
 
+    companion object {
+        /** Covers are decoded no larger than this (px); the library shows them at most ~200 dp tall. */
+        const val COVER_PX = 900
+    }
+
     fun sortedShelf(): List<ShelfBook> = when (sortBy) {
         SortBy.Recent -> shelf.sortedWith(compareByDescending<ShelfBook> { lastOpened(it) }.thenByDescending { added(it) })
-        SortBy.Title -> shelf.sortedBy { it.book.title.removePrefix("The ").lowercase() }
-        SortBy.Author -> shelf.sortedBy { it.book.author.substringAfterLast(' ').lowercase() }
+        SortBy.Title -> shelf.sortedBy { it.title.removePrefix("The ").lowercase() }
+        SortBy.Author -> shelf.sortedBy { it.author.substringAfterLast(' ').lowercase() }
         SortBy.Added -> shelf.sortedByDescending { added(it) }
         SortBy.Progress -> shelf.sortedByDescending { progress(it) ?: -1f }
     }
@@ -203,7 +265,18 @@ fun App(controller: AppController = remember { AppController() }, systemDark: Bo
         CompositionLocalProvider(LocalBackStack provides controller.back) {
             if (reading != null) {
                 BackAction { controller.reading = null }
-                ReaderScreen(controller, reading, uiDark, onClose = { controller.reading = null })
+                // the parsed book lives only while it is open: leaving the reader drops it
+                val book by produceState<EpubBook?>(null, reading) {
+                    value = null
+                    runCatching { withContext(Dispatchers.Default) { reading.load() } }
+                        .onSuccess { value = it }
+                        .onFailure { controller.error = openError(it, reading.title); controller.reading = null }
+                }
+                val b = book
+                if (b == null) OpeningScreen(reading, controller.lastPage(reading))
+                else ReaderScreen(controller, reading, b, uiDark, onClose = { controller.reading = null })
+            } else if (controller.restoring) {
+                Box(Modifier.fillMaxSize().background(LocalJr.current.background))
             } else {
                 Library(controller)
             }

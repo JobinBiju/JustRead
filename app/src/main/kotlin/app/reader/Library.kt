@@ -64,7 +64,7 @@ fun Library(controller: AppController) {
     var goalDialog by remember { mutableStateOf(false) }
 
     val books = controller.sortedShelf().let { all ->
-        if (query.isBlank()) all else all.filter { it.book.title.contains(query, true) || it.book.author.contains(query, true) }
+        if (query.isBlank()) all else all.filter { it.title.contains(query, true) || it.author.contains(query, true) }
     }
     val current = controller.shelf.filter { controller.position(it) != null && !controller.finished(it) }
         .maxByOrNull { controller.lastOpened(it) }
@@ -161,12 +161,12 @@ private fun ContinueCard(controller: AppController, b: ShelfBook, modifier: Modi
     val pct = (progress * 100).roundToInt()
     Row(modifier.fillMaxWidth().height(128.dp).clip(RoundedCornerShape(12.dp)).background(jr.container)
         .clickable { controller.reading = b }.padding(16.dp)
-        .semantics { contentDescription = "Resume ${b.book.title}, $pct% read" },
+        .semantics { contentDescription = "Resume ${b.title}, $pct% read" },
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
         BookCover(b, Modifier.width(64.dp).height(96.dp), showText = false)
         Column(Modifier.weight(1f).height(96.dp)) {
             Text("Continue reading", style = JrType.labelSmall, color = jr.onVariant)
-            Text(b.book.title, style = JrType.titleLarge, color = jr.onBackground, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            Text(b.title, style = JrType.titleLarge, color = jr.onBackground, maxLines = 1, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.padding(top = 2.dp))
             controller.chapterTitle(b)?.let {
                 Text(it, style = JrType.body, color = jr.onVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -250,7 +250,7 @@ private fun BookMenu(controller: AppController, b: ShelfBook) {
     val jr = LocalJr.current
     var open by remember { mutableStateOf(false) }
     Box {
-        IconBtn(JrIcons.More, "Options for ${b.book.title}", jr.onVariant, size = 44.dp) { open = true }
+        IconBtn(JrIcons.More, "Options for ${b.title}", jr.onVariant, size = 44.dp) { open = true }
         DropdownMenu(open, onDismissRequest = { open = false }, containerColor = jr.menu) {
             MenuRow("Open", JrIcons.ChevronRight) { open = false; controller.reading = b }
             if (controller.finished(b)) MenuRow("Mark as unread", JrIcons.Check) { open = false; controller.markFinished(b, false) }
@@ -267,8 +267,8 @@ private fun GridBook(controller: AppController, b: ShelfBook) {
         BookCover(b, Modifier.fillMaxWidth().aspectRatio(2f / 3f).clickable { controller.reading = b })
         Row(verticalAlignment = Alignment.Top) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(b.book.title, style = JrType.bookTitle, color = jr.onBackground, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                if (b.book.author.isNotBlank()) Text(b.book.author, style = JrType.caption, color = jr.onVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(b.title, style = JrType.bookTitle, color = jr.onBackground, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (b.author.isNotBlank()) Text(b.author, style = JrType.caption, color = jr.onVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Box(Modifier.padding(top = 2.dp)) { BookStatus(controller, b, compact = false) }
             }
             Box(Modifier.padding(end = 0.dp).padding(top = 0.dp)) { BookMenu(controller, b) }
@@ -284,8 +284,8 @@ private fun ListBook(controller: AppController, b: ShelfBook) {
             verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             BookCover(b, Modifier.width(40.dp).height(60.dp), showText = false, corner = 3.dp)
             Column(Modifier.weight(1f)) {
-                Text(b.book.title, style = JrType.bookTitle, color = jr.onBackground, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                if (b.book.author.isNotBlank()) Text(b.book.author, style = JrType.body, color = jr.onVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(b.title, style = JrType.bookTitle, color = jr.onBackground, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (b.author.isNotBlank()) Text(b.author, style = JrType.body, color = jr.onVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             BookStatus(controller, b, compact = true)
             BookMenu(controller, b)

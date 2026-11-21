@@ -19,6 +19,10 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.luminance
 import androidx.core.view.WindowCompat
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import app.reader.App
 import app.reader.AppController
 import app.reader.DarkJr
@@ -36,6 +40,7 @@ class MainActivity : ComponentActivity() {
         SettingsStore.init(applicationContext)
         app.reader.BookStore.init(applicationContext)
         controller = AppController()
+        lifecycleScope.launch { controller.loadLibrary() } // lists saved books off the main thread
         val picker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let { openUri(it) } }
         controller.requestOpenFile = { picker.launch(arrayOf("application/epub+zip", "application/octet-stream")) }
         Hooks.setBrightness = { v ->
@@ -92,8 +97,13 @@ class MainActivity : ComponentActivity() {
         intent.data?.let { openUri(it) }
     }
 
+    /** Reads a picked or shared book off the main thread, then adds and opens it. */
     private fun openUri(uri: Uri) {
-        val bytes = runCatching { contentResolver.openInputStream(uri)?.use { it.readBytes() } }.getOrNull() ?: return
-        controller.open(bytes, uri.lastPathSegment?.substringAfterLast('/') ?: "book.epub")
+        lifecycleScope.launch {
+            val bytes = withContext(Dispatchers.IO) {
+                runCatching { contentResolver.openInputStream(uri)?.use { it.readBytes() } }.getOrNull()
+            } ?: return@launch
+            controller.open(bytes, uri.lastPathSegment?.substringAfterLast('/') ?: "book.epub")
+        }
     }
 }

@@ -33,6 +33,7 @@ fun DrawScope.drawPage(
     measurer: TextMeasurer,
     header: String,
     footer: String,
+    pictures: (String) -> ImageBitmap?,
 ) {
     drawRect(colors.page)
     val small = TextStyle(fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.Medium, fontFamily = FontFamily.SansSerif,
@@ -47,10 +48,10 @@ fun DrawScope.drawPage(
         val l = measurer.measure(footer, small, maxLines = 1)
         drawText(l, topLeft = Offset((size.width - l.size.width) / 2f, size.height - spec.insetBottom - 26f * dp - l.size.height / 2f))
     }
-    if (page != null) drawColumns(page, spec, colors, spec.marginTop)
+    if (page != null) drawColumns(page, spec, colors, spec.marginTop, pictures)
 }
 
-fun DrawScope.drawColumns(page: Page, spec: PageSpec, colors: ThemeColors, top: Float) {
+fun DrawScope.drawColumns(page: Page, spec: PageSpec, colors: ThemeColors, top: Float, pictures: (String) -> ImageBitmap?) {
     page.columns.forEachIndexed { c, frags ->
         val x0 = spec.columnX(c)
         for (f in frags) when (f) {
@@ -62,7 +63,7 @@ fun DrawScope.drawColumns(page: Page, spec: PageSpec, colors: ThemeColors, top: 
                 }
             }
             is Frag.Picture -> {
-                val img = f.image
+                val img = pictures(f.path)
                 if (img != null) drawImage(img, IntOffset.Zero, IntSize(img.width, img.height),
                     IntOffset((x0 + f.x).toInt(), (top + f.y).toInt()), IntSize(f.w.toInt().coerceAtLeast(1), f.h.toInt().coerceAtLeast(1)))
                 else drawRoundRect(colors.secondary.copy(alpha = 0.2f), Offset(x0 + f.x, top + f.y), Size(f.w, f.h), CornerRadius(8f))

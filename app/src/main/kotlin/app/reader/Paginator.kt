@@ -25,7 +25,7 @@ import androidx.compose.ui.unit.sp
 /** One piece of a page: some lines of a paragraph, a picture or a divider. Coordinates are within its column. */
 sealed class Frag {
     class Lines(val layout: TextLayoutResult, val first: Int, val last: Int, val x: Float, val y: Float, val height: Float, val secondary: Boolean) : Frag()
-    class Picture(val image: ImageBitmap?, val x: Float, val y: Float, val w: Float, val h: Float, val alt: String) : Frag()
+    class Picture(val path: String, val x: Float, val y: Float, val w: Float, val h: Float, val alt: String) : Frag()
     class Rule(val x: Float, val y: Float, val w: Float) : Frag()
 }
 
@@ -90,7 +90,8 @@ class Paginator(
     private val book: EpubBook,
     private val spec: PageSpec,
     private val measurer: TextMeasurer,
-    private val pictures: (String) -> ImageBitmap?,
+    /** A picture's size in px (only its header is read), or null if it can't be read. */
+    private val pictureSize: (String) -> androidx.compose.ui.unit.IntSize?,
 ) {
     private val s = spec.settings
     private val density = Density(spec.density, 1f)
@@ -221,14 +222,14 @@ class Paginator(
                     afterLabel = isChapterLabel(b)
                 }
                 is Block.Picture -> {
-                    val img = pictures(b.path)
-                    val iw = (img?.width ?: 300) * spec.density
-                    val ih = (img?.height ?: 200) * spec.density
+                    val px = pictureSize(b.path)
+                    val iw = (px?.width ?: 300) * spec.density
+                    val ih = (px?.height ?: 200) * spec.density
                     val scale = minOf(1f, colW / iw, colH * IMAGE_MAX_HEIGHT / ih)
                     val w = iw * scale; val h = ih * scale
                     if (cur.frags.isNotEmpty() && y + h > colH) newColumn(bi, 0)
                     val top = if (cur.frags.isEmpty()) 0f else y + 0.3f * em
-                    cur.frags += Frag.Picture(img, (colW - w) / 2f, top, w, h, b.alt)
+                    cur.frags += Frag.Picture(b.path, (colW - w) / 2f, top, w, h, b.alt)
                     y = top + h + 0.6f * em
                 }
                 Block.Rule -> {

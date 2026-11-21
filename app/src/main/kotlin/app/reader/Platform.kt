@@ -31,6 +31,7 @@ import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.util.zip.CRC32
 import java.util.zip.ZipEntry
+import java.util.zip.ZipFile
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
 
@@ -45,6 +46,21 @@ fun unzipEntries(bytes: ByteArray): Map<String, ByteArray> {
     }
     return out
 }
+
+/**
+ * Opens a ZIP (EPUB) on disk and hands [block] a reader for single entries plus the entry names,
+ * so only the entries asked for are ever decompressed.
+ */
+fun <T> withZipFile(file: java.io.File, block: (read: (String) -> ByteArray?, names: List<String>) -> T): T =
+    ZipFile(file).use { zip ->
+        val names = zip.entries().asSequence().filter { !it.isDirectory }.map { it.name.trimStart('/') }.toList()
+        block({ name -> (zip.getEntry(name) ?: zip.getEntry("/$name"))?.let { e -> zip.getInputStream(e).use { it.readBytes() } } }, names)
+    }
+
+/** Every file of a ZIP on disk, keyed by its path inside the archive. */
+fun unzipFile(file: java.io.File): Map<String, ByteArray> =
+    runCatching { withZipFile(file) { read, names -> names.associateWith { read(it) ?: ByteArray(0) } } }
+        .getOrElse { unzipEntries(file.readBytes()) } // a few archives only open as a stream
 
 /** Writes a ZIP archive; the first entry is stored uncompressed (EPUB needs that for "mimetype"). */
 fun zipEntries(entries: List<Pair<String, ByteArray>>): ByteArray {
@@ -81,6 +97,32 @@ fun decodePicture(bytes: ByteArray, maxSide: Int = 0): ImageBitmap? = runCatchin
     BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)?.also { it.prepareToDraw() }?.asImageBitmap()
 }.getOrNull()
 
+/** A picture's size in pixels, read from its header without decoding it; null when it can't be read. */
+fun pictureSize(bytes: ByteArray): androidx.compose.ui.unit.IntSize? {
+    val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+    return if (opts.outWidth > 0 && opts.outHeight > 0) androidx.compose.ui.unit.IntSize(opts.outWidth, opts.outHeight) else null
+}
+
+/**
+ * The book's pictures, decoded only when a page draws them and kept in a cache of at most
+ * [maxBytes] of pixels, so an illustrated book never holds all of its pictures at once.
+ */
+class PictureCache(private val files: Map<String, ByteArray>, maxBytes: Int = 48 shl 20, private val maxSide: Int = 1600) {
+    private val missing = HashSet<String>()
+    private val cache = object : android.util.LruCache<String, ImageBitmap>(maxBytes) {
+        override fun sizeOf(key: String, value: ImageBitmap) = value.asAndroidBitmap().allocationByteCount
+    }
+    operator fun get(path: String): ImageBitmap? {
+        cache.get(path)?.let { return it }
+        if (path in missing) return null
+        val img = files[path]?.let { decodePicture(it, maxSide) }
+        if (img == null) missing += path else cache.put(path, img)
+        return img
+    }
+    fun clear() = cache.evictAll()
+}
+
 /** Small persistent key/value store for reader settings. */
 object SettingsStore {
     private var prefs: SharedPreferences? = null
@@ -110,9 +152,10 @@ object BookStore {
             val tmp = java.io.File(d, "$id.tmp"); tmp.writeBytes(bytes); tmp.renameTo(f)
         }
     }
-    fun loadAll(): List<Pair<String, ByteArray>> =
-        dir?.listFiles { f -> f.name.endsWith(".epub") }?.sortedBy { it.lastModified() }
-            ?.mapNotNull { f -> runCatching { f.nameWithoutExtension to f.readBytes() }.getOrNull() } ?: emptyList()
+    /** The saved books, least recently used first. Nothing is read from them. */
+    fun files(): List<java.io.File> =
+        dir?.listFiles { f -> f.name.endsWith(".epub") }?.sortedBy { it.lastModified() } ?: emptyList()
+    fun file(id: String): java.io.File? = dir?.let { java.io.File(it, "$id.epub") }?.takeIf { it.exists() }
     fun remove(id: String) { dir?.let { java.io.File(it, "$id.epub").delete() } }
 }
 
