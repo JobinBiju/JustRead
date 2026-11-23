@@ -75,21 +75,25 @@ class Updater(private val activity: ComponentActivity, private val controller: A
     private fun check(manual: Boolean) {
         val busy = controller.update
         if (busy is UpdateState.Downloading || busy is UpdateState.Installing) return
-        if (manual) controller.update = UpdateState.Checking
+        if (manual) toast("Checking for updates…")
         activity.lifecycleScope.launch {
             val found = withContext(Dispatchers.IO) { runCatching { latest() } }
             found.onSuccess { r ->
                 release = r
                 controller.update = when {
                     r != null && r.code > installedCode -> UpdateState.Available(r.version, r.notes)
-                    manual -> UpdateState.UpToDate(installedName)
-                    else -> UpdateState.Idle
+                    else -> {
+                        if (manual) toast("JustRead is up to date ($installedName)")
+                        UpdateState.Idle
+                    }
                 }
             }.onFailure {
-                if (manual) controller.update = UpdateState.Failed("Couldn't check for updates. Check your connection and try again.")
+                if (manual) toast("Couldn't check for updates. Check your connection.")
             }
         }
     }
+
+    private fun toast(text: String) = android.widget.Toast.makeText(activity, text, android.widget.Toast.LENGTH_SHORT).show()
 
     private fun latest(): Release? {
         val json = JSONObject(get(URL("https://api.github.com/repos/$REPO/releases/latest"), json = true).decodeToString())

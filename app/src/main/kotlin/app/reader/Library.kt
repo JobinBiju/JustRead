@@ -195,11 +195,9 @@ private fun UpdateCard(controller: AppController, modifier: Modifier) {
     val s = controller.update
     val (title, detail) = when (s) {
         UpdateState.Idle -> return
-        UpdateState.Checking -> "Checking for updates…" to null
-        is UpdateState.UpToDate -> "JustRead is up to date" to "Version ${s.version}"
-        is UpdateState.Available -> "JustRead ${s.version} is available" to "Update to get the latest changes."
-        is UpdateState.Downloading -> "Downloading JustRead ${s.version}" to "${(s.fraction * 100).roundToInt()}%"
-        is UpdateState.Installing -> "Installing JustRead ${s.version}" to "Confirm the update when Android asks."
+        is UpdateState.Available -> "Update available" to "JustRead ${s.version}"
+        is UpdateState.Downloading -> "Downloading update" to "JustRead ${s.version} · ${(s.fraction * 100).roundToInt()}%"
+        is UpdateState.Installing -> "Installing update" to "Confirm it when Android asks"
         is UpdateState.Failed -> "Update didn't finish" to s.message
     }
     Column(modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(jr.container).padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 12.dp),
@@ -207,7 +205,7 @@ private fun UpdateCard(controller: AppController, modifier: Modifier) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Icon(JrIcons.Download, null, tint = jr.primary, modifier = Modifier.size(24.dp))
             Column(Modifier.weight(1f)) {
-                Text(title, style = JrType.label, color = jr.onBackground)
+                Text(title, style = JrType.label, color = jr.onBackground, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 if (detail != null) Text(detail, style = JrType.caption, color = jr.onVariant)
             }
             when (s) {
@@ -221,7 +219,7 @@ private fun UpdateCard(controller: AppController, modifier: Modifier) {
                 }
                 else -> {}
             }
-            if (s !is UpdateState.Downloading && s !is UpdateState.Checking)
+            if (s !is UpdateState.Downloading)
                 IconBtn(JrIcons.Close, "Dismiss", jr.onVariant, size = 40.dp) { controller.update = UpdateState.Idle }
         }
         if (s is UpdateState.Downloading) StopProgress(s.fraction, Modifier.fillMaxWidth().padding(end = 8.dp))

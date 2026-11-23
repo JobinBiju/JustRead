@@ -55,8 +55,6 @@ data class Bookmark(val locator: Locator, val created: Long)
 /** Where an app update stands, shown as a card at the top of the library. */
 sealed class UpdateState {
     data object Idle : UpdateState()
-    data object Checking : UpdateState()
-    data class UpToDate(val version: String) : UpdateState()
     data class Available(val version: String, val notes: String) : UpdateState()
     data class Downloading(val version: String, val fraction: Float) : UpdateState()
     data class Installing(val version: String) : UpdateState()
