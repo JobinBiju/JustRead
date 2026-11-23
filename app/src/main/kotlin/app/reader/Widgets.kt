@@ -420,8 +420,10 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawMotif(art: Cove
             drawCircle(art.ink, w * 0.25f, Offset(w * 0.625f, h * 0.68f), style = Stroke(w * 0.015f))
         }
         else -> {
-            drawRect(art.ink.copy(alpha = 0.85f), Offset(w * 0.46f, h * 0.55f), Size(w * 0.08f, h * 0.3f))
-            drawRect(art.ink.copy(alpha = 0.85f), Offset(w * 0.34f, h * 0.63f), Size(w * 0.32f, w * 0.08f))
+            // three horizon lines, shortening upwards: abstract, no symbols
+            listOf(0.72f, 0.5f, 0.3f).forEachIndexed { i, f ->
+                drawRect(art.ink.copy(alpha = 0.85f - 0.2f * i), Offset(w * 0.12f, h * (0.82f - 0.07f * i)), Size(w * f, w * 0.035f))
+            }
         }
     }
 }
