@@ -41,6 +41,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -136,7 +138,9 @@ private fun TopBar(controller: AppController, searching: Boolean, query: String,
             IconBtn(JrIcons.Search, "Search library", jr.onBackground) { onSearch(true) }
             Box {
                 IconBtn(JrIcons.More, "More options", jr.onBackground) { menu = true }
-                DropdownMenu(menu, onDismissRequest = { menu = false }, containerColor = jr.menu) {
+                DropdownMenu(menu, onDismissRequest = { menu = false }, containerColor = jr.menu,
+                    // keep clear of the screen edge, a little below the button
+                    offset = androidx.compose.ui.unit.DpOffset((-12).dp, 4.dp), modifier = Modifier.width(232.dp)) {
                     if (controller.requestOpenFile != null) MenuRow("Add a book", JrIcons.Plus) { menu = false; controller.requestOpenFile?.invoke() }
                     MenuRow("Daily reading goal", JrIcons.Target) { menu = false; onGoal() }
                     controller.checkForUpdates?.let { check -> MenuRow("Check for updates", JrIcons.Download) { menu = false; check(true) } }
@@ -188,41 +192,66 @@ private fun ContinueCard(controller: AppController, b: ShelfBook, modifier: Modi
     }
 }
 
-/** An app update: available, downloading, waiting for the installer, or what went wrong. */
+/** An app update, as in the design: available, downloading, ready to install, or what went wrong. */
 @Composable
 private fun UpdateCard(controller: AppController, modifier: Modifier) {
     val jr = LocalJr.current
     val s = controller.update
-    val (title, detail) = when (s) {
-        UpdateState.Idle -> return
-        is UpdateState.Available -> "Update available" to "JustRead ${s.version}"
-        is UpdateState.Downloading -> "Downloading update" to "JustRead ${s.version} · ${(s.fraction * 100).roundToInt()}%"
-        is UpdateState.Installing -> "Installing update" to "Confirm it when Android asks"
-        is UpdateState.Failed -> "Update didn't finish" to s.message
+    if (s == UpdateState.Idle) return
+    val bg = if (jr.dark) jr.secondaryContainer else Color(0xFFF3DDBF)
+    val ink = if (jr.dark) jr.onSecondaryContainer else Color(0xFF2A1A07)
+    val soft = if (jr.dark) jr.onVariant else Color(0xFF5A4632)
+    val disc = if (jr.dark) jr.background else Color(0xFFF9F2E5)
+    fun mb(b: Long) = if (b >= 10_000_000) "${(b / 1_000_000.0).roundToInt()} MB" else "%.1f MB".format(b / 1_000_000.0)
+    val (icon, tint) = when (s) {
+        is UpdateState.Ready -> JrIcons.Check to jr.tertiary
+        is UpdateState.Failed -> JrIcons.Alert to jr.error
+        else -> JrIcons.Download to jr.primary
     }
-    Column(modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(jr.container).padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Icon(JrIcons.Download, null, tint = jr.primary, modifier = Modifier.size(24.dp))
+    val (title, detail) = when (s) {
+        is UpdateState.Available -> "Version ${s.version} is available" to
+            ("You have ${s.installed}" + if (s.bytes > 0) " · ${mb(s.bytes)} download" else "")
+        is UpdateState.Downloading -> "Downloading ${s.version}" to
+            (if (s.total > 0) "${(s.done * 100 / s.total).toInt()}% · ${mb(s.done).removeSuffix(" MB")} of ${mb(s.total)}" else mb(s.done))
+        is UpdateState.Ready -> "Version ${s.version} is ready to install" to "Android will ask you to confirm."
+        is UpdateState.Failed -> s.title to s.message
+        UpdateState.Idle -> return
+    }
+    Column(modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(bg)
+        .semantics { contentDescription = title }
+        .padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            Box(Modifier.size(40.dp).clip(CircleShape).background(disc), contentAlignment = Alignment.Center) {
+                Icon(icon, null, tint = if (jr.dark && s !is UpdateState.Failed) ink else tint, modifier = Modifier.size(22.dp))
+            }
             Column(Modifier.weight(1f)) {
-                Text(title, style = JrType.label, color = jr.onBackground, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                if (detail != null) Text(detail, style = JrType.caption, color = jr.onVariant)
+                Text(title, style = JrType.label, color = ink)
+                Text(detail, style = JrType.caption, color = soft, modifier = Modifier.padding(top = 2.dp))
             }
-            when (s) {
-                is UpdateState.Available, is UpdateState.Failed -> {
-                    val label = if (s is UpdateState.Available) "Update" else "Try again"
-                    Box(Modifier.height(40.dp).clip(RoundedCornerShape(20.dp)).background(jr.primary)
-                        .clickable { if (s is UpdateState.Available) controller.installUpdate?.invoke() else controller.checkForUpdates?.invoke(true) }
-                        .padding(horizontal = 20.dp), contentAlignment = Alignment.Center) {
-                        Text(label, style = JrType.label, color = jr.onPrimary)
-                    }
-                }
-                else -> {}
-            }
-            if (s !is UpdateState.Downloading)
-                IconBtn(JrIcons.Close, "Dismiss", jr.onVariant, size = 40.dp) { controller.update = UpdateState.Idle }
         }
-        if (s is UpdateState.Downloading) StopProgress(s.fraction, Modifier.fillMaxWidth().padding(end = 8.dp))
+        if (s is UpdateState.Downloading) {
+            val f = if (s.total > 0) s.done / s.total.toFloat() else 0f
+            Box(Modifier.padding(start = 54.dp, top = 4.dp)) { StopProgress(f, Modifier.fillMaxWidth(), track = disc) }
+        }
+        Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)) {
+            val (quiet, quietAction) = when (s) {
+                is UpdateState.Downloading -> "Cancel" to { controller.cancelUpdate?.invoke(); Unit }
+                is UpdateState.Failed -> "Dismiss" to { controller.update = UpdateState.Idle }
+                else -> "Later" to { controller.update = UpdateState.Idle }
+            }
+            Box(Modifier.height(40.dp).clip(RoundedCornerShape(20.dp)).clickable(onClick = quietAction).padding(horizontal = 12.dp),
+                contentAlignment = Alignment.Center) { Text(quiet, style = JrType.label, color = jr.primary) }
+            val main: Pair<String, () -> Unit>? = when (s) {
+                is UpdateState.Available -> "Update" to { controller.downloadUpdate?.invoke(); Unit }
+                is UpdateState.Ready -> "Install" to { controller.installUpdate?.invoke(); Unit }
+                is UpdateState.Failed -> "Try again" to { controller.downloadUpdate?.invoke(); Unit }
+                else -> null
+            }
+            if (main != null) Box(Modifier.height(40.dp).clip(RoundedCornerShape(20.dp)).background(jr.primary)
+                .clickable(onClick = main.second).padding(horizontal = 24.dp), contentAlignment = Alignment.Center) {
+                Text(main.first, style = JrType.label, color = jr.onPrimary)
+            }
+        }
     }
 }
 

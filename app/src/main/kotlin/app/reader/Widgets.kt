@@ -114,7 +114,8 @@ object JrIcons {
     val Share by lazy { icon("share", listOf(circle(17.5f, 5.5f, 2.5f), circle(6.5f, 12f, 2.5f), circle(17.5f, 18.5f, 2.5f), "M8.7 10.8l6.6-4", "M8.7 13.2l6.6 4")) }
     val Plus by lazy { icon("plus", listOf("M12 5v14", "M5 12h14")) }
     val Trash by lazy { icon("trash", listOf("M5 7h14", "M10 4h4", "M7 7l1 13h8l1-13")) }
-    val Download by lazy { icon("download", listOf("M12 4v11", "M7 10l5 5 5-5", "M5 20h14")) }
+    val Download by lazy { icon("download", listOf("M12 4v11", "M7 10.5l5 5 5-5", "M5 20h14")) }
+    val Alert by lazy { icon("alert", listOf(circle(12f, 12f, 8.5f), "M12 7.5v5.5"), listOf(circle(12f, 16.3f, 1.3f))) }
     val Note by lazy { icon("note", listOf(rrect(5f, 4f, 14f, 16f, 2f), "M9 9h6", "M9 13h6", "M9 17h3")) }
     val NoteRemove by lazy { icon("note-remove", listOf("M14.5 4.5l4 4L10 17H6v-4z", "M4 20h16")) }
     val Highlight by lazy { icon("highlight", listOf("M14.5 4.5l4 4L10 17H6v-4z", "M4 20h16")) }
@@ -273,7 +274,7 @@ fun Divider(modifier: Modifier = Modifier) {
 
 /** A thin progress bar: filled part, a gap, the rest, and a stop dot at the end. */
 @Composable
-fun StopProgress(fraction: Float, modifier: Modifier = Modifier) {
+fun StopProgress(fraction: Float, modifier: Modifier = Modifier, track: Color = LocalJr.current.track) {
     val jr = LocalJr.current
     Canvas(modifier.height(4.dp)) {
         val dp = density
@@ -282,7 +283,7 @@ fun StopProgress(fraction: Float, modifier: Modifier = Modifier) {
         drawRoundRect(jr.primary, Offset.Zero, Size(activeW, h), CornerRadius(h / 2))
         val restX = activeW + 4f * dp
         if (restX < size.width) {
-            drawRoundRect(jr.track, Offset(restX, 0f), Size(size.width - restX, h), CornerRadius(h / 2))
+            drawRoundRect(track, Offset(restX, 0f), Size(size.width - restX, h), CornerRadius(h / 2))
             drawRoundRect(jr.primary, Offset(size.width - h, 0f), Size(h, h), CornerRadius(h / 2))
         }
     }

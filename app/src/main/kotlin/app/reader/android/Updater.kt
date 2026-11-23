@@ -13,6 +13,7 @@ import androidx.lifecycle.lifecycleScope
 import app.reader.AppController
 import app.reader.UpdateState
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -27,9 +28,12 @@ import java.security.MessageDigest
  * package installer. Every release is signed with the same key, so it installs as an update.
  */
 class Updater(private val activity: ComponentActivity, private val controller: AppController) {
-    private class Release(val version: String, val code: Int, val notes: String, val assets: Map<String, String>)
+    private class Release(val version: String, val code: Int, val assets: Map<String, Pair<String, Long>>)
 
     private var release: Release? = null
+    /** The checked APK of [release], once downloaded. */
+    private var apk: File? = null
+    private var job: kotlinx.coroutines.Job? = null
     private val action = "${activity.packageName}.UPDATE_STATUS"
 
     private val receiver = object : BroadcastReceiver() {
@@ -43,10 +47,9 @@ class Updater(private val activity: ComponentActivity, private val controller: A
                     confirm?.let { runCatching { activity.startActivity(it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } }
                 }
                 PackageInstaller.STATUS_SUCCESS -> controller.update = UpdateState.Idle
-                PackageInstaller.STATUS_FAILURE_ABORTED -> controller.update = UpdateState.Available(version, release?.notes.orEmpty())
-                else -> controller.update = UpdateState.Failed(
-                    intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)?.let { "Couldn't install the update: $it" }
-                        ?: "Couldn't install the update.")
+                PackageInstaller.STATUS_FAILURE_ABORTED -> controller.update = UpdateState.Ready(version) // declined: install later
+                else -> controller.update = UpdateState.Failed("Couldn’t install the update",
+                    intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE) ?: "Android didn’t install it. Try again.")
             }
         }
     }
@@ -54,6 +57,8 @@ class Updater(private val activity: ComponentActivity, private val controller: A
     fun start() {
         ContextCompat.registerReceiver(activity, receiver, IntentFilter(action), ContextCompat.RECEIVER_NOT_EXPORTED)
         controller.checkForUpdates = { manual -> check(manual) }
+        controller.downloadUpdate = { download() }
+        controller.cancelUpdate = { job?.cancel() }
         controller.installUpdate = { install() }
         check(manual = false)
     }
@@ -74,26 +79,31 @@ class Updater(private val activity: ComponentActivity, private val controller: A
     /** Looks for a newer release. A check at launch stays quiet unless there is one. */
     private fun check(manual: Boolean) {
         val busy = controller.update
-        if (busy is UpdateState.Downloading || busy is UpdateState.Installing) return
-        if (manual) toast("Checking for updates…")
+        if (busy is UpdateState.Downloading || busy is UpdateState.Ready) return
+        if (manual) toast("Checking for updates…", app.reader.ToastMark.Working)
         activity.lifecycleScope.launch {
             val found = withContext(Dispatchers.IO) { runCatching { latest() } }
             found.onSuccess { r ->
-                release = r
-                controller.update = when {
-                    r != null && r.code > installedCode -> UpdateState.Available(r.version, r.notes)
-                    else -> {
-                        if (manual) toast("JustRead is up to date ($installedName)")
-                        UpdateState.Idle
-                    }
+                if (r != null && r.code > installedCode) {
+                    if (release?.version != r.version) apk = null
+                    release = r
+                    if (manual) controller.hideToast()
+                    controller.update = UpdateState.Available(r.version, installedName, r.assets[assetName(r)]?.second ?: 0L)
+                } else {
+                    if (manual) toast("You’re on the latest version · $installedName", app.reader.ToastMark.Done)
+                    controller.update = UpdateState.Idle
                 }
             }.onFailure {
-                if (manual) toast("Couldn't check for updates. Check your connection.")
+                if (manual) toast("Couldn’t check for updates. Check your connection.")
             }
         }
     }
 
-    private fun toast(text: String) = android.widget.Toast.makeText(activity, text, android.widget.Toast.LENGTH_SHORT).show()
+    /** The APK built for this phone's processor, else the universal one. */
+    private fun assetName(r: Release) = Build.SUPPORTED_ABIS.map { "JustRead-${r.version}-$it.apk" }.firstOrNull { it in r.assets }
+        ?: "JustRead-${r.version}-universal.apk"
+
+    private fun toast(text: String, mark: app.reader.ToastMark = app.reader.ToastMark.None) = controller.showToast(text, mark)
 
     private fun latest(): Release? {
         val json = JSONObject(get(URL("https://api.github.com/repos/$REPO/releases/latest"), json = true).decodeToString())
@@ -101,40 +111,53 @@ class Updater(private val activity: ComponentActivity, private val controller: A
         val code = versionCode(version) ?: return null
         val assets = json.optJSONArray("assets") ?: return null
         val map = (0 until assets.length()).associate { i ->
-            val a = assets.getJSONObject(i); a.optString("name") to a.optString("browser_download_url")
+            val a = assets.getJSONObject(i); a.optString("name") to (a.optString("browser_download_url") to a.optLong("size"))
         }
-        return Release(version, code, json.optString("body"), map)
+        return Release(version, code, map)
     }
 
-    /** Downloads, checks and installs the release found by the last check. */
-    private fun install() {
+    /** Downloads the release found by the last check and checks it against SHA256SUMS.txt. */
+    private fun download() {
         val r = release ?: return
-        val name = Build.SUPPORTED_ABIS.map { "JustRead-${r.version}-$it.apk" }.firstOrNull { it in r.assets }
-            ?: "JustRead-${r.version}-universal.apk"
-        val url = r.assets[name]
-        if (url == null) { controller.update = UpdateState.Failed("This release has no APK for this phone."); return }
-        controller.update = UpdateState.Downloading(r.version, 0f)
-        activity.lifecycleScope.launch {
+        apk?.takeIf { it.exists() }?.let { controller.update = UpdateState.Ready(r.version); return }
+        val name = assetName(r)
+        val (url, size) = r.assets[name] ?: run {
+            controller.update = UpdateState.Failed("Couldn’t download the update", "This release has no APK for this phone."); return
+        }
+        controller.update = UpdateState.Downloading(r.version, 0L, size)
+        job = activity.lifecycleScope.launch {
             val file = withContext(Dispatchers.IO) {
                 runCatching {
-                    val sums = r.assets["SHA256SUMS.txt"]?.let { get(URL(it)).decodeToString() }
+                    val sums = r.assets["SHA256SUMS.txt"]?.let { get(URL(it.first)).decodeToString() }
                     val expected = sums?.lineSequence()?.map { it.trim().split(Regex("\\s+")) }
                         ?.firstOrNull { it.size == 2 && it[1].removePrefix("*") == name }?.get(0)
                     val dir = File(activity.cacheDir, "updates").apply { deleteRecursively(); mkdirs() }
                     val out = File(dir, name)
-                    download(URL(url), out) { f -> activity.runOnUiThread { controller.update = UpdateState.Downloading(r.version, f) } }
+                    download(URL(url), out) { done, total ->
+                        activity.runOnUiThread { if (job?.isActive != false) controller.update = UpdateState.Downloading(r.version, done, total) }
+                    }
                     if (expected != null && !sha256(out).equals(expected, ignoreCase = true)) {
-                        out.delete(); error("The download was damaged. Try again.")
+                        out.delete(); error("damaged")
                     }
                     out
                 }
             }
-            file.onSuccess { f ->
-                controller.update = UpdateState.Installing(r.version)
-                runCatching { commit(f) }.onFailure { controller.update = UpdateState.Failed("Couldn't install the update: ${it.message}") }
-            }.onFailure {
-                controller.update = UpdateState.Failed(it.message?.takeIf { m -> m.startsWith("The download") } ?: "Couldn't download the update. Check your connection and try again.")
-            }
+            file.onSuccess { f -> apk = f; controller.update = UpdateState.Ready(r.version) }
+                .onFailure { e ->
+                    controller.update = when {
+                        e is kotlinx.coroutines.CancellationException -> UpdateState.Available(r.version, installedName, size)
+                        e.message == "damaged" -> UpdateState.Failed("Couldn’t download the update", "The download was damaged. Try again.")
+                        else -> UpdateState.Failed("Couldn’t download the update", "Check your connection and try again.")
+                    }
+                }
+        }
+    }
+
+    /** Hands the downloaded update to Android, which asks the reader to confirm. */
+    private fun install() {
+        val f = apk?.takeIf { it.exists() } ?: return download()
+        runCatching { commit(f) }.onFailure {
+            controller.update = UpdateState.Failed("Couldn’t install the update", it.message ?: "Try again.")
         }
     }
 
@@ -165,7 +188,7 @@ class Updater(private val activity: ComponentActivity, private val controller: A
         } finally { c.disconnect() }
     }
 
-    private fun download(url: URL, to: File, progress: (Float) -> Unit) {
+    private suspend fun download(url: URL, to: File, progress: (done: Long, total: Long) -> Unit) {
         val c = open(url, false)
         try {
             if (c.responseCode !in 200..299) error("HTTP ${c.responseCode}")
@@ -175,11 +198,12 @@ class Updater(private val activity: ComponentActivity, private val controller: A
                 to.outputStream().use { out ->
                     val buf = ByteArray(64 * 1024)
                     while (true) {
+                        kotlinx.coroutines.currentCoroutineContext().ensureActive() // Cancel stops the download
                         val n = input.read(buf); if (n < 0) break
                         out.write(buf, 0, n); done += n
                         if (total > 0) {
                             val pct = (done * 100 / total).toInt()
-                            if (pct != shown) { shown = pct; progress(pct / 100f) }
+                            if (pct != shown) { shown = pct; progress(done, total) }
                         }
                     }
                 }
