@@ -209,6 +209,24 @@ class AppController(private val restoreLastBook: Boolean = true) {
 
     fun removeBookmarks(b: ShelfBook, which: (Bookmark) -> Boolean) = saveBookmarks(b, bookmarks(b).filterNot(which))
 
+    // ---- highlights and notes
+
+    /** Bumped when any book's highlights change, so pages showing them are drawn again. */
+    var highlightsVersion by mutableIntStateOf(0)
+        private set
+
+    fun highlights(b: ShelfBook): List<Highlight> = Highlight.decodeAll(SettingsStore.get("hl:" + b.key))
+
+    private fun saveHighlights(b: ShelfBook, list: List<Highlight>) {
+        SettingsStore.put("hl:" + b.key, Highlight.encodeAll(list.sortedWith(Highlight.BookOrder)))
+        highlightsVersion++
+    }
+
+    /** Adds [h], or replaces the highlight with the same id. */
+    fun putHighlight(b: ShelfBook, h: Highlight) = saveHighlights(b, highlights(b).filterNot { it.id == h.id } + h)
+
+    fun removeHighlight(b: ShelfBook, id: Long) = saveHighlights(b, highlights(b).filterNot { it.id == id })
+
     // ---- reading goal
 
     var goalMinutes by mutableIntStateOf(SettingsStore.get("goal")?.toIntOrNull() ?: 20)

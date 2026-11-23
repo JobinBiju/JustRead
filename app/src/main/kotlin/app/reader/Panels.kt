@@ -288,6 +288,8 @@ fun FontScreen(settings: ReaderSettings, onChange: (ReaderSettings) -> Unit, onB
 fun ContentsSheet(
     shelf: ShelfBook, book: EpubBook, controller: AppController, pg: Pagination, toc: List<TocRow>, current: Int,
     onPick: (Int) -> Unit, onPickLocator: (Locator) -> Unit, onDismiss: () -> Unit,
+    marks: List<Highlight> = emptyList(), place: (Highlight) -> String = { "" },
+    onNote: (Highlight) -> Unit = {}, onCopy: (Highlight) -> Unit = {}, onRemove: (Highlight) -> Unit = {},
 ) {
     val jr = LocalJr.current
     var tab by remember { mutableStateOf(0) }
@@ -333,7 +335,7 @@ fun ContentsSheet(
             }
         }
         Row(Modifier.fillMaxWidth()) {
-            listOf("Chapters" to null, "Bookmarks" to bookmarks.size).forEachIndexed { i, (label, count) ->
+            listOf("Chapters" to null, "Bookmarks" to bookmarks.size, "Highlights" to marks.size).forEachIndexed { i, (label, count) ->
                 Box(Modifier.weight(1f).height(48.dp).clickable { tab = i }, contentAlignment = Alignment.Center) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text(label, style = JrType.label, color = if (tab == i) jr.primary else jr.onVariant)
@@ -360,6 +362,10 @@ fun ContentsSheet(
                     }
                 }
             }
+        } else if (tab == 2) {
+            HighlightsList(marks, book, pg, place,
+                onPick = { h -> onPickLocator(Locator(h.span.chapter, h.span.start.block, h.span.start.char)) },
+                onNote = onNote, onCopy = onCopy, onRemove = onRemove)
         } else if (bookmarks.isEmpty()) {
             Column(Modifier.weight(1f).fillMaxWidth().padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 Icon(JrIcons.Bookmark, null, tint = jr.onVariant, modifier = Modifier.size(32.dp))
@@ -395,9 +401,9 @@ fun ContentsSheet(
 private class Hit(val chapter: Int, val block: Int, val char: Int, val page: Int, val snippet: AnnotatedString)
 
 @Composable
-fun SearchSheet(book: EpubBook, pg: Pagination, toc: List<TocRow>, onPick: (Int) -> Unit, onDismiss: () -> Unit) {
+fun SearchSheet(book: EpubBook, pg: Pagination, toc: List<TocRow>, onPick: (Int) -> Unit, onDismiss: () -> Unit, initial: String = "") {
     val jr = LocalJr.current
-    var query by remember { mutableStateOf("") }
+    var query by remember { mutableStateOf(initial) }
     var hits by remember { mutableStateOf<List<Hit>?>(null) }
     val focus = remember { FocusRequester() }
     LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }

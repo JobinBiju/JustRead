@@ -24,7 +24,9 @@ import androidx.compose.ui.unit.sp
 
 /** One piece of a page: some lines of a paragraph, a picture or a divider. Coordinates are within its column. */
 sealed class Frag {
-    class Lines(val layout: TextLayoutResult, val first: Int, val last: Int, val x: Float, val y: Float, val height: Float, val secondary: Boolean) : Frag()
+    class Lines(val layout: TextLayoutResult, val first: Int, val last: Int, val x: Float, val y: Float, val height: Float, val secondary: Boolean,
+                /** The block (paragraph) of the chapter these lines belong to; character offsets are within it. */
+                val block: Int) : Frag()
     class Picture(val path: String, val x: Float, val y: Float, val w: Float, val h: Float, val alt: String) : Frag()
     class Rule(val x: Float, val y: Float, val w: Float) : Frag()
 }
@@ -212,7 +214,7 @@ class Paginator(
                         }
                         if (k > 0) {
                             val h = layout.getLineBottom(line + k - 1) - layout.getLineTop(line)
-                            cur.frags += Frag.Lines(layout, line, line + k, st.indent, yy, h, st.secondary)
+                            cur.frags += Frag.Lines(layout, line, line + k, st.indent, yy, h, st.secondary, bi)
                             yy += h
                             line += k
                         }

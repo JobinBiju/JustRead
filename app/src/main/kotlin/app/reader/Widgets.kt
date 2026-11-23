@@ -25,6 +25,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -112,6 +114,9 @@ object JrIcons {
     val Share by lazy { icon("share", listOf(circle(17.5f, 5.5f, 2.5f), circle(6.5f, 12f, 2.5f), circle(17.5f, 18.5f, 2.5f), "M8.7 10.8l6.6-4", "M8.7 13.2l6.6 4")) }
     val Plus by lazy { icon("plus", listOf("M12 5v14", "M5 12h14")) }
     val Trash by lazy { icon("trash", listOf("M5 7h14", "M10 4h4", "M7 7l1 13h8l1-13")) }
+    val Note by lazy { icon("note", listOf(rrect(5f, 4f, 14f, 16f, 2f), "M9 9h6", "M9 13h6", "M9 17h3")) }
+    val NoteRemove by lazy { icon("note-remove", listOf("M14.5 4.5l4 4L10 17H6v-4z", "M4 20h16")) }
+    val Highlight by lazy { icon("highlight", listOf("M14.5 4.5l4 4L10 17H6v-4z", "M4 20h16")) }
     val Target by lazy { icon("target", listOf(circle(12f, 12f, 8f), circle(12f, 12f, 3.5f))) }
 }
 
@@ -325,7 +330,8 @@ fun JrSheet(onDismiss: () -> Unit, modifier: Modifier = Modifier, fullHeightTop:
                     .clip(RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp))
                     .background(jr.sheet)
                     .clickable(remember { MutableInteractionSource() }, indication = null) {}
-                    .windowInsetsPadding(WindowInsets.navigationBars)
+                    // stays above the keyboard when a field in the sheet has it open
+                    .windowInsetsPadding(WindowInsets.navigationBars.union(WindowInsets.ime))
             ) {
                 Box(Modifier.fillMaxWidth().height(36.dp).pointerInput(Unit) {
                     detectVerticalDragGestures(

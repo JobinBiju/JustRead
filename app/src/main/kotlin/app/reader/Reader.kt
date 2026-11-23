@@ -34,7 +34,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.displayCutout
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
@@ -74,6 +76,8 @@ import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.util.VelocityTracker
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFontFamilyResolver
 import androidx.compose.ui.text.TextMeasurer
@@ -91,7 +95,7 @@ import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.roundToInt
 
-private enum class Panel { Themes, Customise, Fonts, Contents, Search, Note }
+private enum class Panel { Themes, Customise, Fonts, Contents, Search, Note, HlNote }
 
 /** A page turn in progress. */
 private class Turn {
@@ -129,6 +133,16 @@ fun ReaderScreen(controller: AppController, shelf: ShelfBook, book: EpubBook, ui
     DisposableEffect(pictureCache) { onDispose { pictureCache.clear() } }
     val focus = remember { FocusRequester() }
     val turn = remember { Turn() }
+    val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
+
+    // highlights and notes
+    val marks = remember(shelf, controller.highlightsVersion) { controller.highlights(shelf) }
+    var selection by remember { mutableStateOf<TextSpan?>(null) } // words picked on this page, not yet a highlight
+    var active by remember { mutableStateOf<Long?>(null) }        // the highlight whose toolbar is open
+    var noteFor by remember { mutableStateOf<Long?>(null) }       // the highlight whose note is being written
+    var searchFor by remember { mutableStateOf("") }
+    var lastColor by remember { mutableStateOf(HlColor.entries.firstOrNull { it.name == SettingsStore.get("hlColor") } ?: HlColor.Yellow) }
 
     // reading time for the daily goal (frames stop while the app is in the background)
     LaunchedEffect(shelf) {
@@ -142,7 +156,8 @@ fun ReaderScreen(controller: AppController, shelf: ShelfBook, book: EpubBook, ui
     BoxWithConstraints(Modifier.fillMaxSize().background(colors.page)) {
         val w = constraints.maxWidth.toFloat()
         val h = constraints.maxHeight.toFloat()
-        val safe = WindowInsets.safeDrawing
+        // bars and cutouts only: the keyboard (a note being typed) must not change the page layout
+        val safe = WindowInsets.systemBars.union(WindowInsets.displayCutout)
         val insetTop = safe.getTop(density).toFloat()
         val insetBottom = safe.getBottom(density).toFloat()
         val spec = remember(w, h, density.density, settings, insetTop, insetBottom) {
@@ -171,7 +186,7 @@ fun ReaderScreen(controller: AppController, shelf: ShelfBook, book: EpubBook, ui
 
         val pages = pg.pages
         val index = pg.pageFor(locator.chapter, locator.block, locator.char).coerceIn(0, pages.lastIndex)
-        val bitmaps = remember(pg, colors) { HashMap<Int, ImageBitmap>() }
+        val bitmaps = remember(pg, colors, marks) { HashMap<Int, ImageBitmap>() }
         val toc = remember(book, pg) { tocRows(book, pg) }
 
         fun chapterName(i: Int): String = toc.lastOrNull { it.page <= i }?.title
@@ -179,7 +194,7 @@ fun ReaderScreen(controller: AppController, shelf: ShelfBook, book: EpubBook, ui
         fun bitmap(i: Int): ImageBitmap = bitmaps.getOrPut(i) {
             if (bitmaps.size > 5) bitmaps.keys.filter { abs(it - i) > 2 }.forEach { bitmaps.remove(it) }
             renderToBitmap(w.toInt(), h.toInt(), density) {
-                drawPage(pages[i], pg.spec, colors, measurer, book.title, "${i + 1}", picture)
+                drawPage(pages[i], pg.spec, colors, measurer, book.title, "${i + 1}", picture, marks, pageDark)
             }
         }
         fun goTo(i: Int) {
@@ -190,11 +205,24 @@ fun ReaderScreen(controller: AppController, shelf: ShelfBook, book: EpubBook, ui
         }
         fun goToLocator(l: Locator) = goTo(pg.pageFor(l.chapter, l.block, l.char))
 
+        val pageText = remember(pg, index) { PageText(pages[index], pg.spec, pg.spec.marginTop) }
+        val chapter = pages[index].chapter
+        LaunchedEffect(index, pg) { selection = null; active = null }
+        fun place(h: Highlight): String {
+            val p = pg.pageFor(h.span.chapter, h.span.start.block, h.span.start.char)
+            return "${chapterName(p)} · Page ${p + 1}"
+        }
+        fun newHighlight(span: TextSpan): Highlight {
+            val h = Highlight(maxOf(nowMillis(), (marks.maxOfOrNull { it.id } ?: 0L) + 1), span, lastColor)
+            controller.putHighlight(shelf, h)
+            return h
+        }
+
         // record where we are (progress and chapter for the library) once the book is laid out
         LaunchedEffect(pg) { goTo(index) }
 
         // render this page and its neighbours ahead of time, one per frame, while nothing moves
-        LaunchedEffect(pg, colors, index, w, h) {
+        LaunchedEffect(pg, colors, marks, index, w, h) {
             for (i in listOf(index, index + 1, index - 1)) {
                 if (i !in pages.indices || bitmaps.containsKey(i)) continue
                 withFrameNanos { }
@@ -286,16 +314,25 @@ fun ReaderScreen(controller: AppController, shelf: ShelfBook, book: EpubBook, ui
         val guide = if (settings.lineGuide) (if (guideY < 0f) h * 0.42f else guideY) else -1f
 
         if (settings.pageTurn == PageTurn.Scroll) {
-            ScrollReader(pages, pg, colors, index, picture, readerModifier, onTap = { chrome = !chrome }) { i -> goTo(i) }
+            ScrollReader(pages, pg, colors, index, picture, marks, pageDark, readerModifier, onTap = { chrome = !chrome }) { i -> goTo(i) }
         } else {
             Canvas(readerModifier
                 .clipToBounds()
                 .reserveEdgesForPageTurns()
-                .pointerInput(pg, settings.pageTurn, index, settings.lineGuide) {
+                .pointerInput(pg, settings.pageTurn, index, settings.lineGuide, marks) {
                     detectTapGestures(
-                        onLongPress = { pos -> if (settings.lineGuide) guideY = pos.y },
+                        onLongPress = { pos ->
+                            if (settings.lineGuide) guideY = pos.y
+                            if (turn.busy) return@detectTapGestures
+                            val word = pageText.wordAt(pos, chapter) ?: return@detectTapGestures
+                            chrome = false; active = null; selection = word
+                        },
                     ) { pos ->
+                        if (selection != null || active != null) { selection = null; active = null; return@detectTapGestures }
                         if (chrome) { chrome = false; return@detectTapGestures }
+                        val at = pageText.charAt(pos)
+                        val hit = at?.let { p -> marks.lastOrNull { it.span.contains(chapter, p) } }
+                        if (hit != null) { active = hit.id; return@detectTapGestures }
                         if (hitLink(pos)) return@detectTapGestures
                         val edge = max(64f * density.density, w * 0.25f)
                         when {
@@ -308,7 +345,7 @@ fun ReaderScreen(controller: AppController, shelf: ShelfBook, book: EpubBook, ui
                 .pointerInput(pg, settings.pageTurn, index) {
                     detectDragGestures(
                         onDragStart = { pos ->
-                            if (turn.busy) return@detectDragGestures
+                            if (turn.busy || selection != null || active != null) return@detectDragGestures
                             chrome = false
                             val forward = pos.x > w / 2f
                             if ((forward && index >= pages.lastIndex) || (!forward && index <= 0)) return@detectDragGestures
@@ -380,7 +417,8 @@ fun ReaderScreen(controller: AppController, shelf: ShelfBook, book: EpubBook, ui
                     // the pre-rendered page is a single GPU texture; fall back to drawing the text
                     val ready = bitmaps[index]
                     if (ready != null) drawImage(ready)
-                    else drawPage(pages[index], pg.spec, colors, measurer, book.title, "${index + 1}", picture)
+                    else drawPage(pages[index], pg.spec, colors, measurer, book.title, "${index + 1}", picture, marks, pageDark)
+                    selection?.let { drawSelection(pageText.boxes(it, density.density), if (pageDark) Color(0xFFE7C399) else Color(0xFF6A4A2B)) }
                     if (guide >= 0f) {
                         // line guide: everything outside a three-line band fades back
                         val band = lineH * 1.6f
@@ -399,6 +437,62 @@ fun ReaderScreen(controller: AppController, shelf: ShelfBook, book: EpubBook, ui
         }
 
         if (chrome && panel == null) BackAction { chrome = false }
+        if ((selection != null || active != null) && panel == null) BackAction { selection = null; active = null }
+
+        // the selection's handles and toolbar, or a highlight's toolbar
+        if (panel == null && settings.pageTurn != PageTurn.Scroll) {
+            val sel = selection
+            val hl = active?.let { id -> marks.firstOrNull { it.id == id } }
+            val boxes = when {
+                sel != null -> pageText.boxes(sel, density.density)
+                hl != null -> pageText.boxes(hl.span, density.density)
+                else -> emptyList()
+            }
+            if (boxes.isNotEmpty()) {
+                val dp = density.density
+                if (sel != null) {
+                    val lineH = boxes.first().height
+                    SelectionHandle(Offset(boxes.first().left - 10f * dp, boxes.first().bottom + 10f * dp)) { p ->
+                        val at = pageText.charAt(Offset(p.x + 10f * dp, p.y - 10f * dp - lineH / 2f), nearest = true)?.let { pageText.snapToWord(it, false) } ?: return@SelectionHandle
+                        selection = TextSpan(chapter, at, sel.end).normalized().takeIf { !it.isEmpty } ?: sel
+                    }
+                    SelectionHandle(Offset(boxes.last().right + 10f * dp, boxes.last().bottom + 10f * dp)) { p ->
+                        val at = pageText.charAt(Offset(p.x - 10f * dp, p.y - 10f * dp - lineH / 2f), nearest = true)?.let { pageText.snapToWord(it, true) } ?: return@SelectionHandle
+                        selection = TextSpan(chapter, sel.start, at).normalized().takeIf { !it.isEmpty } ?: sel
+                    }
+                }
+                val barH = 52f * dp
+                val below = boxes.last().bottom + (if (sel != null) 28f else 12f) * dp
+                val y = if (below + barH < h - insetBottom - 16f * dp) below
+                    else (boxes.first().top - 12f * dp - barH).coerceAtLeast(insetTop + 8f * dp)
+                val bar = Modifier.offset { IntOffset(0, y.roundToInt()) }.padding(horizontal = 16.dp).fillMaxWidth()
+                if (sel != null) {
+                    val text = book.textOf(sel)
+                    SelectionToolbar(bar,
+                        onHighlight = { val n = newHighlight(sel); selection = null; active = n.id },
+                        onNote = { val n = newHighlight(sel); selection = null; active = n.id; noteFor = n.id; panel = Panel.HlNote },
+                        onCopy = { clipboard.setText(androidx.compose.ui.text.AnnotatedString(text)); selection = null },
+                        onShare = {
+                            Hooks.share("“$text”\n\n— ${book.title}${if (book.author.isNotBlank()) ", ${book.author}" else ""}")
+                            selection = null
+                        },
+                        onTranslate = { translate(context, text); selection = null },
+                        onSearch = { searchFor = text.take(80); selection = null; panel = Panel.Search },
+                        onSelectAll = { pageText.all(chapter)?.let { selection = it } },
+                    )
+                } else if (hl != null) {
+                    HighlightToolbar(bar, hl,
+                        onColor = { c ->
+                            lastColor = c; SettingsStore.put("hlColor", c.name)
+                            controller.putHighlight(shelf, hl.copy(color = c))
+                        },
+                        onNote = { noteFor = hl.id; panel = Panel.HlNote },
+                        onRemoveHighlight = { controller.removeHighlight(shelf, hl.id); active = null },
+                        onRemoveNote = { controller.putHighlight(shelf, hl.copy(note = "", edited = nowMillis())) },
+                    )
+                }
+            }
+        }
         ReaderChrome(
             visible = chrome && panel == null,
             book = book, chapter = chapterName(index), pages = pages, index = index, bookmarked = bookmarked, settings = settings,
@@ -418,9 +512,24 @@ fun ReaderScreen(controller: AppController, shelf: ShelfBook, book: EpubBook, ui
             Panel.Contents -> ContentsSheet(shelf, book, controller, pg, toc, index,
                 onPick = { goTo(it); panel = null; chrome = false },
                 onPickLocator = { goToLocator(it); panel = null; chrome = false },
-                onDismiss = { panel = null })
+                onDismiss = { panel = null },
+                marks = marks, place = { place(it) },
+                onNote = { h -> noteFor = h.id; panel = Panel.HlNote },
+                onCopy = { h -> clipboard.setText(androidx.compose.ui.text.AnnotatedString(book.textOf(h.span))) },
+                onRemove = { h -> controller.removeHighlight(shelf, h.id) })
             Panel.Search -> SearchSheet(book, pg, toc,
-                onPick = { goTo(it); panel = null; chrome = false }, onDismiss = { panel = null })
+                onPick = { goTo(it); panel = null; chrome = false; searchFor = "" }, onDismiss = { panel = null; searchFor = "" }, initial = searchFor)
+            Panel.HlNote -> {
+                val h = marks.firstOrNull { it.id == noteFor }
+                if (h == null) LaunchedEffect(Unit) { panel = null }
+                else NoteSheet(h, book.textOf(h.span), place(h),
+                    onSave = { t ->
+                        controller.putHighlight(shelf, h.copy(note = t, edited = nowMillis()))
+                        panel = null; noteFor = null; active = null
+                    },
+                    onDelete = { controller.putHighlight(shelf, h.copy(note = "", edited = nowMillis())); panel = null; noteFor = null },
+                    onDismiss = { panel = null; noteFor = null })
+            }
             Panel.Note -> JrSheet(onDismiss = { panel = null }) {
                 SheetTitle("Note", onClose = { panel = null })
                 Text(note.orEmpty(), style = JrType.bodyLarge, color = LocalJr.current.onBackground,
@@ -470,7 +579,7 @@ fun OpeningScreen(shelf: ShelfBook, page: Int?) {
 @Composable
 private fun ScrollReader(
     pages: List<Page>, pg: Pagination, colors: ThemeColors, index: Int, pictures: (String) -> ImageBitmap?,
-    modifier: Modifier, onTap: () -> Unit, onVisible: (Int) -> Unit,
+    marks: List<Highlight>, pageDark: Boolean, modifier: Modifier, onTap: () -> Unit, onVisible: (Int) -> Unit,
 ) {
     val state = rememberLazyListState(initialFirstVisibleItemIndex = index)
     val density = LocalDensity.current
@@ -484,7 +593,7 @@ private fun ScrollReader(
                     Box(Modifier.width(60.dp).height(1.dp).background(colors.secondary.copy(alpha = 0.4f)))
                 }
             }
-            Canvas(Modifier.fillMaxWidth().height(itemH)) { drawColumns(page, pg.spec, colors, pad / 2f, pictures) }
+            Canvas(Modifier.fillMaxWidth().height(itemH)) { drawColumns(page, pg.spec, colors, pad / 2f, pictures, marks, pageDark) }
         }
         item { Spacer(Modifier.height(80.dp)) }
     }
@@ -558,4 +667,28 @@ private fun ChromeAction(label: String, modifier: Modifier, onClick: () -> Unit,
         icon(jr.onVariant)
         Text(label, style = JrType.labelSmall, color = jr.onVariant)
     }
+}
+
+/** A selection handle: a 44 dp touch target that reports where the finger has moved it to, in page coordinates. */
+@Composable
+private fun SelectionHandle(center: Offset, onMove: (Offset) -> Unit) {
+    val c by androidx.compose.runtime.rememberUpdatedState(center)
+    val move by androidx.compose.runtime.rememberUpdatedState(onMove)
+    val half = with(LocalDensity.current) { 22.dp.toPx() }
+    Box(Modifier.offset { IntOffset((center.x - half).roundToInt(), (center.y - half).roundToInt()) }.size(44.dp)
+        .pointerInput(Unit) {
+            var at = Offset.Zero
+            detectDragGestures(onDragStart = { at = c - Offset(half, half) + it }) { change, d ->
+                change.consume(); at += d; move(at)
+            }
+        })
+}
+
+/** Opens a translation app for [text]: the system's Translate action, else any app that handles selected text. */
+private fun translate(context: android.content.Context, text: String) {
+    val translate = android.content.Intent("android.intent.action.TRANSLATE").putExtra(android.content.Intent.EXTRA_TEXT, text)
+    val process = android.content.Intent(android.content.Intent.ACTION_PROCESS_TEXT).setType("text/plain")
+        .putExtra(android.content.Intent.EXTRA_PROCESS_TEXT, text).putExtra(android.content.Intent.EXTRA_PROCESS_TEXT_READONLY, true)
+    runCatching { context.startActivity(translate) }
+        .recoverCatching { context.startActivity(android.content.Intent.createChooser(process, "Translate")) }
 }

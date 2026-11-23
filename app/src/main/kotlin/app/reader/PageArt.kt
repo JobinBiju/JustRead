@@ -34,6 +34,8 @@ fun DrawScope.drawPage(
     header: String,
     footer: String,
     pictures: (String) -> ImageBitmap?,
+    marks: List<Highlight> = emptyList(),
+    pageDark: Boolean = false,
 ) {
     drawRect(colors.page)
     val small = TextStyle(fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.Medium, fontFamily = FontFamily.SansSerif,
@@ -48,10 +50,14 @@ fun DrawScope.drawPage(
         val l = measurer.measure(footer, small, maxLines = 1)
         drawText(l, topLeft = Offset((size.width - l.size.width) / 2f, size.height - spec.insetBottom - 26f * dp - l.size.height / 2f))
     }
-    if (page != null) drawColumns(page, spec, colors, spec.marginTop, pictures)
+    if (page != null) drawColumns(page, spec, colors, spec.marginTop, pictures, marks, pageDark)
 }
 
-fun DrawScope.drawColumns(page: Page, spec: PageSpec, colors: ThemeColors, top: Float, pictures: (String) -> ImageBitmap?) {
+fun DrawScope.drawColumns(
+    page: Page, spec: PageSpec, colors: ThemeColors, top: Float, pictures: (String) -> ImageBitmap?,
+    marks: List<Highlight> = emptyList(), pageDark: Boolean = false,
+) {
+    drawHighlights(page, spec, top, marks, pageDark)
     page.columns.forEachIndexed { c, frags ->
         val x0 = spec.columnX(c)
         for (f in frags) when (f) {
