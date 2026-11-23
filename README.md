@@ -10,7 +10,7 @@ A calm, focused reader with real page curls, careful typography, themes for day 
 and a small library that remembers where you left off. A native Android app written with
 Jetpack Compose. No store, no accounts, no ads.
 
-[![status](https://img.shields.io/badge/status-early%20development-8cc4d6)](#status)
+[![status](https://img.shields.io/badge/status-stable-3DA35D)](#status)
 [![built in Kotlin](https://img.shields.io/badge/built%20in-Kotlin-7F52FF?logo=kotlin&logoColor=white)](https://kotlinlang.org)
 [![Jetpack Compose](https://img.shields.io/badge/UI-Jetpack%20Compose-4285F4?logo=jetpackcompose&logoColor=white)](https://developer.android.com/compose)
 [![runs on](https://img.shields.io/badge/runs%20on-Android%208.0%2B-3DDC84?logo=android&logoColor=white)](#download)
@@ -45,8 +45,8 @@ Jetpack Compose. No store, no accounts, no ads.
 
 ## Status
 
-Early development. It reads reflowable EPUBs well. Fixed-layout books are shown reflowed, and
-encrypted (DRM) books are refused.
+Stable and in active use. It reads reflowable EPUBs well. Fixed-layout books are shown reflowed,
+and encrypted (DRM) books are refused.
 
 ## Download
 
