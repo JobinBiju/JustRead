@@ -88,15 +88,19 @@ data class Curl(val angleDeg: Float, val position: Float, val radius: Float) {
             val dx = grab.x - finger.x
             val dy = grab.y - finger.y
             val len = hypot(dx, dy).coerceAtLeast(1f)
-            var angle = atan2(dy / len, dx / len) * 180f / PI_F
-            var c = at(angle, grab, finger, radius)
-            var k = 0
-            while (k < 40 && abs(angle) > 0.01f && c.contact < max(0f, pageHeight * c.ny)) {
-                angle *= 0.85f
-                c = at(angle, grab, finger, radius)
-                k++
+            val angle = atan2(dy / len, dx / len) * 180f / PI_F
+            fun holds(c: Curl) = c.contact >= max(0f, pageHeight * c.ny)
+            val c = at(angle, grab, finger, radius)
+            if (holds(c) || abs(angle) < 0.01f) return c
+            // The largest angle (towards the finger's) that keeps the bound edge down. Found by
+            // bisection so it changes smoothly with the finger: stepping it in fixed ratios made the
+            // page jump between angles while held at the limit.
+            var ok = 0f; var bad = 1f
+            repeat(18) {
+                val mid = (ok + bad) / 2f
+                if (holds(at(angle * mid, grab, finger, radius))) ok = mid else bad = mid
             }
-            return c
+            return at(angle * ok, grab, finger, radius)
         }
 
         fun lerp(a: Curl, b: Curl, t: Float) = Curl(
@@ -129,56 +133,80 @@ bool onPage(float2 p) {
     return p.x >= 0.0 && p.y >= 0.0 && p.x <= size.x && p.y <= size.y;
 }
 
-// How far p lies off the page: its distance to the nearest paper edge.
-float outside(float2 p) {
-    return length(max(max(-p, p - size), float2(0.0)));
+// Signed distance to the page rectangle: negative inside.
+float sdPage(float2 p) {
+    float2 q = abs(p - size * 0.5) - size * 0.5;
+    return length(max(q, float2(0.0))) + min(max(q.x, q.y), 0.0);
 }
 
-// A drop shadow of a straight edge, offset off dp outwards and blurred with sigma dp, seen dist px
-// from the edge: a blurred step, approximated by a logistic.
-float tail(float dist, float off, float sigma) {
-    return 1.0 / (1.0 + exp(1.702 * (dist / dp - off) / sigma));
+// Signed distance from screen point p to the curled sheet's outline (negative on paper).
+// flapOnly: just the face-down layer. Each layer is bounded by the roll's standing edge (d = r).
+float sheetDist(float2 p, bool flapOnly) {
+    float d = dot(p, n) - (pos - r);
+    if (d > r) {
+        float sb = sdPage(p + n * ((PI / 2.0) * r - d));
+        return length(float2(d - r, max(sb, 0.0)));
+    }
+    float a = d > 0.0 ? asin(d / r) : 0.0;
+    float su = max(sdPage(p + n * (d > 0.0 ? r * (PI - a) - d : PI * r - 2.0 * d)), d - r);
+    if (flapOnly) return su;
+    float sl = max(sdPage(p + n * (d > 0.0 ? r * a - d : 0.0)), d - r);
+    return min(su, sl);
 }
 
-// Two stacked shadows, composited like CSS drop-shadow layers.
+// A CSS drop-shadow of a shape, at the point dist px from its edge (after the offset):
+// the shape blurred with sigma dp, i.e. a Gaussian step, approximated by a logistic.
+float blurStep(float dist, float sigma) {
+    return 1.0 / (1.0 + exp(1.702 * dist / (sigma * dp)));
+}
+
 float stack(float a, float b) { return 1.0 - (1.0 - a) * (1.0 - b); }
 
-// The whole sheet onto the next page: drop-shadow(12dp, blur 26) 0.34 + (2dp, blur 5) 0.22.
-half4 castShadow(float dist) {
-    float a = min(0.85, shadowK * stack(0.34 * tail(dist, 12.0, 13.0), 0.22 * tail(dist, 2.0, 2.5)));
-    return half4(half3(shade) * a, a);
+// The design's sheet shadow, filter: drop-shadow(12dp along n, blur 26) 0.34, then drop-shadow(2dp, blur 5) 0.22.
+// The offsets follow n, so only edges facing the turn throw a wide shadow. The second filter also
+// shadows the first one's shadow, as CSS filters chain.
+float castShadow(float2 q) {
+    if (sheetDist(q, false) > 64.0 * dp) return 0.0; // too far from the paper for any shadow
+    float a12 = 0.34 * blurStep(sheetDist(q - n * (12.0 * dp), false), 13.0);
+    float a14 = 0.34 * blurStep(sheetDist(q - n * (14.0 * dp), false), 13.0);
+    float b = 0.22 * stack(blurStep(sheetDist(q - n * (2.0 * dp), false), 2.5), a14);
+    return stack(a12, b);
 }
 
-// The face-down flap onto the page under it: drop-shadow(4dp, blur 9) 0.20 + (14dp, blur 26) 0.13.
-float flapShadow(float dist) {
-    return min(0.85, shadowK * stack(0.20 * tail(dist, 4.0, 4.5), 0.13 * tail(dist, 14.0, 13.0)));
+// The face-down flap onto what lies under it: drop-shadow(4dp against n, blur 9) 0.20,
+// then drop-shadow(14dp, blur 26) 0.13.
+float flapShadow(float2 q) {
+    if (sheetDist(q, true) > 48.0 * dp) return 0.0;
+    float a4 = 0.20 * blurStep(sheetDist(q + n * (4.0 * dp), true), 4.5);
+    float a18 = 0.20 * blurStep(sheetDist(q + n * (18.0 * dp), true), 4.5);
+    float b = 0.13 * stack(blurStep(sheetDist(q + n * (14.0 * dp), true), 13.0), a18);
+    return stack(a4, b);
 }
 
 half4 main(float2 q) {
     float d = dot(q, n) - (pos - r); // distance past the contact line
-    if (d > r) { // beyond the roll: next page, in the roll's shadow
-        float2 src = q + n * ((PI / 2.0) * r - d);
-        return castShadow(length(float2(d - r, outside(src))));
+    float a = d > 0.0 && d <= r ? asin(d / r) : 0.0; // 0 at contact, quarter-turn at the edge
+    if (d <= r) {
+        // Top layer first: the sheet coming back over the roll, back showing.
+        float2 up = q + n * (d > 0.0 ? r * (PI - a) - d : PI * r - 2.0 * d);
+        if (onPage(up)) {
+            float u = 1.0 - a / (PI / 2.0);
+            float sh = 0.26 * pow(max(0.0, 1.0 - u / 0.45), 1.6);
+            half3 c = mix(half3(paper), page.eval(up).rgb, 0.24); // print shows through
+            return half4(c * (1.0 - sh), 1.0);
+        }
+        // Then the sheet going up the roll, or still flat: front showing, under the flap's shadow.
+        float2 lo = q + n * (d > 0.0 ? r * a - d : 0.0);
+        if (onPage(lo)) {
+            float rim = d > 0.0 ? 0.13 * pow(max(0.0, 1.0 - (1.0 - d / r) / 0.4), 2.0) : 0.0;
+            float dim = min(0.85, shadowK * flapShadow(q));
+            half4 c = page.eval(lo);
+            return half4(mix(c.rgb * (1.0 - rim), half3(shade), half(dim)), c.a);
+        }
     }
-    // Top layer first: the sheet coming back over the roll, back showing.
-    float a = d > 0.0 ? asin(d / r) : 0.0; // 0 at contact, quarter-turn at the edge
-    float2 up = q + n * (d > 0.0 ? r * (PI - a) - d : PI * r - 2.0 * d);
-    if (onPage(up)) {
-        float u = 1.0 - a / (PI / 2.0);
-        float sh = 0.26 * pow(max(0.0, 1.0 - u / 0.45), 1.6);
-        half3 c = mix(half3(paper), page.eval(up).rgb, 0.24); // print shows through
-        return half4(c * (1.0 - sh), 1.0);
-    }
-    // Then the sheet going up the roll, or still flat: front showing.
-    float2 lo = q + n * (d > 0.0 ? r * a - d : 0.0);
-    if (onPage(lo)) {
-        float rim = d > 0.0 ? 0.13 * pow(max(0.0, 1.0 - (1.0 - d / r) / 0.4), 2.0) : 0.0;
-        float dim = flapShadow(outside(up)); // shadow of the layer above
-        half4 c = page.eval(lo);
-        return half4(c.rgb * (1.0 - rim) * (1.0 - dim), c.a);
-    }
-    // No paper here: next page, in the shadow of the nearest paper edge.
-    return castShadow(min(outside(up), outside(lo)));
+    // No paper here: the next page, under the sheet's shadow and the flap's.
+    float s = min(0.85, shadowK * stack(castShadow(q), flapShadow(q)));
+    return half4(half3(shade) * s, s);
 }
 """
 
@@ -200,7 +228,8 @@ private const val CAST_REACH_DP = 48f
 /** Same profile as the shader's castShadow, [x] dp from the edge. */
 private fun castShadowAlpha(x: Float, k: Float): Float {
     fun tail(off: Float, sigma: Float) = 1f / (1f + kotlin.math.exp(1.702f * (x - off) / sigma))
-    val a = 1f - (1f - 0.34f * tail(12f, 13f)) * (1f - 0.22f * tail(2f, 2.5f))
+    fun stack(a: Float, b: Float) = 1f - (1f - a) * (1f - b)
+    val a = stack(0.34f * tail(12f, 13f), 0.22f * stack(tail(2f, 2.5f), 0.34f * tail(14f, 13f)))
     return (a * k).coerceAtMost(0.85f)
 }
 
