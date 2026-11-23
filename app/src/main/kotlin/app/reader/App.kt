@@ -52,6 +52,17 @@ data class Locator(val chapter: Int, val block: Int, val char: Int) {
 
 data class Bookmark(val locator: Locator, val created: Long)
 
+/** Where an app update stands, shown as a card at the top of the library. */
+sealed class UpdateState {
+    data object Idle : UpdateState()
+    data object Checking : UpdateState()
+    data class UpToDate(val version: String) : UpdateState()
+    data class Available(val version: String, val notes: String) : UpdateState()
+    data class Downloading(val version: String, val fraction: Float) : UpdateState()
+    data class Installing(val version: String) : UpdateState()
+    data class Failed(val message: String) : UpdateState()
+}
+
 enum class SortBy(val label: String) { Recent("Recently read"), Title("Title"), Author("Author"), Added("Date added"), Progress("Progress") }
 enum class ShelfView { Grid, List }
 
@@ -74,6 +85,11 @@ class AppController(private val restoreLastBook: Boolean = true) {
     var requestOpenFile: (() -> Unit)? = null
 
     /** Bumped whenever saved per-book data changes, so the library recomposes. */
+    var update by mutableStateOf<UpdateState>(UpdateState.Idle)
+    /** Set by the app shell where updates are possible: check (true when the reader asked), and install. */
+    var checkForUpdates: ((manual: Boolean) -> Unit)? = null
+    var installUpdate: (() -> Unit)? = null
+
     var metaVersion by mutableIntStateOf(0)
         private set
     private fun touch() { metaVersion++ }

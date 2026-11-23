@@ -84,6 +84,9 @@ fun Library(controller: AppController) {
             ) {
                 val full: androidx.compose.foundation.lazy.grid.LazyGridItemSpanScope.() -> GridItemSpan = { GridItemSpan(maxLineSpan) }
                 if (!searching) {
+                    if (controller.update != UpdateState.Idle) item(span = full) {
+                        UpdateCard(controller, Modifier.padding(horizontal = if (grid) 0.dp else 16.dp).padding(top = 8.dp, bottom = if (grid) 0.dp else 12.dp))
+                    }
                     if (current != null) item(span = full) {
                         ContinueCard(controller, current, Modifier.padding(horizontal = if (grid) 0.dp else 16.dp).padding(top = 8.dp, bottom = if (grid) 0.dp else 12.dp))
                     }
@@ -136,6 +139,7 @@ private fun TopBar(controller: AppController, searching: Boolean, query: String,
                 DropdownMenu(menu, onDismissRequest = { menu = false }, containerColor = jr.menu) {
                     if (controller.requestOpenFile != null) MenuRow("Add a book", JrIcons.Plus) { menu = false; controller.requestOpenFile?.invoke() }
                     MenuRow("Daily reading goal", JrIcons.Target) { menu = false; onGoal() }
+                    controller.checkForUpdates?.let { check -> MenuRow("Check for updates", JrIcons.Download) { menu = false; check(true) } }
                 }
             }
         }
@@ -181,6 +185,46 @@ private fun ContinueCard(controller: AppController, b: ShelfBook, modifier: Modi
             .padding(horizontal = 20.dp), contentAlignment = Alignment.Center) {
             Text("Resume", style = JrType.label, color = jr.onPrimary)
         }
+    }
+}
+
+/** An app update: available, downloading, waiting for the installer, or what went wrong. */
+@Composable
+private fun UpdateCard(controller: AppController, modifier: Modifier) {
+    val jr = LocalJr.current
+    val s = controller.update
+    val (title, detail) = when (s) {
+        UpdateState.Idle -> return
+        UpdateState.Checking -> "Checking for updates…" to null
+        is UpdateState.UpToDate -> "JustRead is up to date" to "Version ${s.version}"
+        is UpdateState.Available -> "JustRead ${s.version} is available" to "Update to get the latest changes."
+        is UpdateState.Downloading -> "Downloading JustRead ${s.version}" to "${(s.fraction * 100).roundToInt()}%"
+        is UpdateState.Installing -> "Installing JustRead ${s.version}" to "Confirm the update when Android asks."
+        is UpdateState.Failed -> "Update didn't finish" to s.message
+    }
+    Column(modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(jr.container).padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Icon(JrIcons.Download, null, tint = jr.primary, modifier = Modifier.size(24.dp))
+            Column(Modifier.weight(1f)) {
+                Text(title, style = JrType.label, color = jr.onBackground)
+                if (detail != null) Text(detail, style = JrType.caption, color = jr.onVariant)
+            }
+            when (s) {
+                is UpdateState.Available, is UpdateState.Failed -> {
+                    val label = if (s is UpdateState.Available) "Update" else "Try again"
+                    Box(Modifier.height(40.dp).clip(RoundedCornerShape(20.dp)).background(jr.primary)
+                        .clickable { if (s is UpdateState.Available) controller.installUpdate?.invoke() else controller.checkForUpdates?.invoke(true) }
+                        .padding(horizontal = 20.dp), contentAlignment = Alignment.Center) {
+                        Text(label, style = JrType.label, color = jr.onPrimary)
+                    }
+                }
+                else -> {}
+            }
+            if (s !is UpdateState.Downloading && s !is UpdateState.Checking)
+                IconBtn(JrIcons.Close, "Dismiss", jr.onVariant, size = 40.dp) { controller.update = UpdateState.Idle }
+        }
+        if (s is UpdateState.Downloading) StopProgress(s.fraction, Modifier.fillMaxWidth().padding(end = 8.dp))
     }
 }
 
