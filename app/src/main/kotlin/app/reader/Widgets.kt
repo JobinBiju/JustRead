@@ -50,6 +50,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.layout.displayCutout
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
@@ -310,7 +314,7 @@ fun GoalRing(fraction: Float, modifier: Modifier = Modifier) {
  * handle down or tapping the scrim closes it.
  */
 @Composable
-fun JrSheet(onDismiss: () -> Unit, modifier: Modifier = Modifier, fullHeightTop: Dp? = null, content: @Composable ColumnScope.() -> Unit) {
+fun JrSheet(onDismiss: () -> Unit, modifier: Modifier = Modifier, fullHeightTop: Dp? = null, maxWidth: Dp = 640.dp, scrim: Boolean = true, content: @Composable ColumnScope.() -> Unit) {
     val jr = LocalJr.current
     val density = LocalDensity.current
     val offset = remember { Animatable(1f) } // fraction of the sheet's height pushed down
@@ -320,15 +324,16 @@ fun JrSheet(onDismiss: () -> Unit, modifier: Modifier = Modifier, fullHeightTop:
     BackAction(onBack = onDismiss)
     Box(Modifier.fillMaxSize()) {
         // the scrim's fade is read while drawing, so the sheet isn't recomposed on every frame of it
-        Box(Modifier.fillMaxSize().drawBehind { drawRect(jr.scrim.copy(alpha = jr.scrim.alpha * (1f - offset.value))) }
+        Box(Modifier.fillMaxSize().drawBehind { if (scrim) drawRect(jr.scrim.copy(alpha = jr.scrim.alpha * (1f - offset.value))) }
             .clickable(remember { MutableInteractionSource() }, indication = null, onClick = onDismiss))
-        BoxWithConstraints(Modifier.align(Alignment.BottomCenter).fillMaxWidth().widthIn(max = 640.dp)) {
+        BoxWithConstraints(Modifier.align(Alignment.BottomCenter).widthIn(max = maxWidth).fillMaxWidth()) {
             val maxH = constraints.maxHeight
             Column(
                 (if (fullHeightTop != null) Modifier.padding(top = fullHeightTop).fillMaxSize() else Modifier)
                     .then(modifier)
                     .fillMaxWidth()
                     .offset { IntOffset(0, (offset.value * maxH + drag.value).roundToInt()) }
+                    .shadow(if (scrim) 0.dp else 12.dp, RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp), ambientColor = jr.shadow, spotColor = jr.shadow)
                     .clip(RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp))
                     .background(jr.sheet)
                     .clickable(remember { MutableInteractionSource() }, indication = null) {}
@@ -349,6 +354,40 @@ fun JrSheet(onDismiss: () -> Unit, modifier: Modifier = Modifier, fullHeightTop:
                 content()
             }
         }
+    }
+}
+
+/**
+ * A sheet along the left or right edge of a wide screen, full height, its inner corners rounded. With
+ * [scrim] the page behind dims; either way a tap outside closes it.
+ */
+@Composable
+fun JrSideSheet(onDismiss: () -> Unit, fromLeft: Boolean, width: Dp = 400.dp, scrim: Boolean = true, content: @Composable ColumnScope.() -> Unit) {
+    val jr = LocalJr.current
+    val offset = remember { Animatable(1f) } // fraction of the sheet's width pushed off screen
+    LaunchedEffect(Unit) { offset.animateTo(0f, tween(260, easing = androidx.compose.animation.core.CubicBezierEasing(0.05f, 0.7f, 0.1f, 1f))) }
+    BackAction(onBack = onDismiss)
+    val shape = if (fromLeft) RoundedCornerShape(topEnd = 28.dp, bottomEnd = 28.dp) else RoundedCornerShape(topStart = 28.dp, bottomStart = 28.dp)
+    val bars = WindowInsets.systemBars.union(WindowInsets.displayCutout)
+    Box(Modifier.fillMaxSize()) {
+        Box(Modifier.fillMaxSize().drawBehind { if (scrim) drawRect(jr.scrim.copy(alpha = jr.scrim.alpha * (1f - offset.value))) }
+            .clickable(remember { MutableInteractionSource() }, indication = null, onClick = onDismiss))
+        // the sheet runs to the screen edge; a cutout or bar on that side only pushes its content in
+        val edge = bars.only(if (fromLeft) WindowInsetsSides.Start else WindowInsetsSides.End)
+        val dir = androidx.compose.ui.platform.LocalLayoutDirection.current
+        val extra = with(LocalDensity.current) {
+            (if (fromLeft) edge.getLeft(this, dir) else edge.getRight(this, dir)).toDp()
+        }
+        Column(Modifier.align(if (fromLeft) Alignment.CenterStart else Alignment.CenterEnd)
+            .fillMaxHeight()
+            .width(width + extra)
+            .offset { IntOffset(((if (fromLeft) -1 else 1) * offset.value * (width + extra).toPx()).roundToInt(), 0) }
+            .shadow(if (scrim) 0.dp else 12.dp, shape, ambientColor = jr.shadow, spotColor = jr.shadow)
+            .clip(shape).background(jr.sheet)
+            .clickable(remember { MutableInteractionSource() }, indication = null) {}
+            .windowInsetsPadding(edge)
+            .windowInsetsPadding(bars.only(WindowInsetsSides.Vertical)),
+            content = content)
     }
 }
 

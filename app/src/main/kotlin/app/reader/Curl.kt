@@ -103,6 +103,22 @@ data class Curl(val angleDeg: Float, val position: Float, val radius: Float) {
             return at(angle * ok, grab, finger, radius)
         }
 
+        /** A screen point in a two-page spread, in the turning leaf's space (spine x = 0). A backward turn is mirrored. */
+        fun toLeaf(p: Offset, pageWidth: Float, forward: Boolean) = Offset(if (forward) p.x - pageWidth else pageWidth - p.x, p.y)
+
+        /**
+         * The curl for a two-page drag, in leaf space. As [forDrag], but the roll tightens as the fold
+         * nears the spine, or the leaf would tear off the binding.
+         */
+        fun forSpreadDrag(grab: Offset, finger: Offset, pageWidth: Float, pageHeight: Float): Curl {
+            val base = radiusFor(pageWidth, (grab - finger).getDistance())
+            val first = forDrag(grab, finger, base, pageHeight)
+            val mirror = first.position + (PI_F / 2f - 1f) * first.radius
+            val room = mirror - max(0f, pageHeight * first.ny)
+            val r = min(base, room * 2f / PI_F).coerceAtLeast(0.5f)
+            return if (r >= base) first else forDrag(grab, finger, r, pageHeight)
+        }
+
         fun lerp(a: Curl, b: Curl, t: Float) = Curl(
             a.angleDeg + (b.angleDeg - a.angleDeg) * t,
             a.position + (b.position - a.position) * t,
@@ -117,7 +133,9 @@ data class Curl(val angleDeg: Float, val position: Float, val radius: Float) {
  * It checks the top layer first, so the sheet coming back over the roll hides the sheet going up it.
  */
 const val CURL_SHADER = """
-uniform shader page;   // the page being turned, as drawn
+uniform shader page;   // the page being turned (its front), as drawn
+uniform shader back;   // two-page spreads: the page on the leaf's back, as drawn
+uniform float dir;     // 0 = one page; two-page spread: 1 = turning forward, -1 = back
 uniform float2 size;   // page size
 uniform float2 n;      // cos and sin of the angle
 uniform float pos;     // standing edge, along n
@@ -125,7 +143,7 @@ uniform float r;       // cylinder radius
 uniform float3 paper;  // the back of the sheet
 uniform float3 shade;  // shadow colour
 uniform float shadowK; // shadow strength
-uniform float dp;      // px per dp: shadow sizes are in dp, like the design's CSS px
+uniform float dp;      // px per shadow unit: the design's dp on a 390 dp page, scaled with the page
 
 const float PI = 3.14159265;
 
@@ -162,28 +180,35 @@ float blurStep(float dist, float sigma) {
 
 float stack(float a, float b) { return 1.0 - (1.0 - a) * (1.0 - b); }
 
-// The design's sheet shadow, filter: drop-shadow(12dp along n, blur 26) 0.34, then drop-shadow(2dp, blur 5) 0.22.
-// The offsets follow n, so only edges facing the turn throw a wide shadow. The second filter also
-// shadows the first one's shadow, as CSS filters chain.
+// Kotlin 4's two shadows, each two layers that stack like paint. Offsets follow n, so only edges
+// facing the turn throw a wide shadow. Sizes are dp on a 390 dp page, scaled with the page (dp uniform).
+// The sheet onto the next page: 12 along n, sigma 13, 0.34; contact 2 along n, sigma 2.5, 0.22.
 float castShadow(float2 q) {
     if (sheetDist(q, false) > 64.0 * dp) return 0.0; // too far from the paper for any shadow
-    float a12 = 0.34 * blurStep(sheetDist(q - n * (12.0 * dp), false), 13.0);
-    float a14 = 0.34 * blurStep(sheetDist(q - n * (14.0 * dp), false), 13.0);
-    float b = 0.22 * stack(blurStep(sheetDist(q - n * (2.0 * dp), false), 2.5), a14);
-    return stack(a12, b);
+    float a1 = 0.34 * blurStep(sheetDist(q - n * (12.0 * dp), false), 13.0);
+    float a2 = 0.22 * blurStep(sheetDist(q - n * (2.0 * dp), false), 2.5);
+    return stack(a1, a2);
 }
 
-// The face-down flap onto what lies under it: drop-shadow(4dp against n, blur 9) 0.20,
-// then drop-shadow(14dp, blur 26) 0.13.
+// The face-down flap onto what lies under it: 4 against n, sigma 4.5, 0.20; 14 against n, sigma 13, 0.13.
 float flapShadow(float2 q) {
-    if (sheetDist(q, true) > 48.0 * dp) return 0.0;
-    float a4 = 0.20 * blurStep(sheetDist(q + n * (4.0 * dp), true), 4.5);
-    float a18 = 0.20 * blurStep(sheetDist(q + n * (18.0 * dp), true), 4.5);
-    float b = 0.13 * stack(blurStep(sheetDist(q + n * (14.0 * dp), true), 13.0), a18);
-    return stack(a4, b);
+    if (sheetDist(q, true) > 64.0 * dp) return 0.0;
+    float a1 = 0.20 * blurStep(sheetDist(q + n * (4.0 * dp), true), 4.5);
+    float a2 = 0.13 * blurStep(sheetDist(q + n * (14.0 * dp), true), 13.0);
+    return stack(a1, a2);
 }
 
-half4 main(float2 q) {
+// Two-page spreads work in the leaf's own space: the spine is x = 0, the outer edge x = size.x.
+// A backward turn is the forward turn mirrored about the spine.
+half4 frontAt(float2 p) { return page.eval(float2(dir < 0.0 ? size.x - p.x : p.x, p.y)); }
+half4 backAt(float2 p) {
+    if (dir == 0.0) return half4(mix(half3(paper), page.eval(p).rgb, 0.24), 1.0); // print shows through
+    return back.eval(float2(dir > 0.0 ? size.x - p.x : p.x, p.y));               // a real page, full ink
+}
+
+half4 main(float2 xy) {
+    float2 q = dir == 0.0 ? xy : float2(dir > 0.0 ? xy.x - size.x : size.x - xy.x, xy.y);
+    float own = dir == 0.0 || q.x >= 0.0 ? 1.0 : 0.0; // the sheet's shadow stays on the leaf's own page
     float d = dot(q, n) - (pos - r); // distance past the contact line
     float a = d > 0.0 && d <= r ? asin(d / r) : 0.0; // 0 at contact, quarter-turn at the edge
     if (d <= r) {
@@ -192,20 +217,20 @@ half4 main(float2 q) {
         if (onPage(up)) {
             float u = 1.0 - a / (PI / 2.0);
             float sh = 0.26 * pow(max(0.0, 1.0 - u / 0.45), 1.6);
-            half3 c = mix(half3(paper), page.eval(up).rgb, 0.24); // print shows through
-            return half4(c * (1.0 - sh), 1.0);
+            half4 c = backAt(up);
+            return half4(c.rgb * (1.0 - sh), c.a);
         }
         // Then the sheet going up the roll, or still flat: front showing, under the flap's shadow.
         float2 lo = q + n * (d > 0.0 ? r * a - d : 0.0);
         if (onPage(lo)) {
             float rim = d > 0.0 ? 0.13 * pow(max(0.0, 1.0 - (1.0 - d / r) / 0.4), 2.0) : 0.0;
             float dim = min(0.85, shadowK * flapShadow(q));
-            half4 c = page.eval(lo);
+            half4 c = frontAt(lo);
             return half4(mix(c.rgb * (1.0 - rim), half3(shade), half(dim)), c.a);
         }
     }
     // No paper here: the next page, under the sheet's shadow and the flap's.
-    float s = min(0.85, shadowK * stack(castShadow(q), flapShadow(q)));
+    float s = min(0.85, shadowK * stack(own * castShadow(q), flapShadow(q)));
     return half4(half3(shade) * s, s);
 }
 """
@@ -216,11 +241,42 @@ half4 main(float2 q) {
  */
 fun DrawScope.drawCurl(top: ImageBitmap, under: ImageBitmap, curl: Curl, paper: Color, darkPage: Boolean) {
     drawImage(under)
-    val shade = if (darkPage) Color.Black else Color(0xFF2E2814)
+    val shade = if (darkPage) Color.Black else SHADOW_INK
     val k = if (darkPage) 1.6f else 1f
     if (drawCurlWithShader(top, curl, paper, shade, k)) return
-    drawCurlStrips(top, curl, paper, shade, k)
+    drawCurlStrips(curl, Size(top.width.toFloat(), top.height.toFloat()), paper, shade, k,
+        front = { drawImage(top) }, back = { drawRect(paper, size = Size(top.width.toFloat(), top.height.toFloat())); drawImage(top, alpha = 0.24f) })
 }
+
+/**
+ * A two-page turn: one leaf moves across the spine. [curl] is in the leaf's own space (spine x = 0).
+ * [underLeft] and [underRight] are what the turn uncovers; [front] is the leaf's face, [back] the page
+ * printed on its back, which ends up on the other side of the spine.
+ */
+fun DrawScope.drawSpreadCurl(
+    front: ImageBitmap, back: ImageBitmap, underLeft: ImageBitmap, underRight: ImageBitmap,
+    curl: Curl, forward: Boolean, paper: Color, darkPage: Boolean,
+) {
+    val w = front.width.toFloat(); val h = front.height.toFloat()
+    drawImage(underLeft)
+    drawImage(underRight, topLeft = Offset(w, 0f))
+    val shade = if (darkPage) Color.Black else SHADOW_INK
+    val k = if (darkPage) 1.6f else 1f
+    if (drawCurlWithShader(front, curl, paper, shade, k, back, if (forward) 1f else -1f)) return
+    fun DrawScope.mirrored(img: ImageBitmap) = withTransform({ scale(-1f, 1f, pivot = Offset(w / 2f, 0f)) }) { drawImage(img) }
+    // leaf space on the canvas: the spine at x = 0, a backward turn mirrored
+    withTransform({ translate(left = w); if (!forward) scale(-1f, 1f, pivot = Offset.Zero) }) {
+        drawCurlStrips(curl, Size(w, h), paper, shade, k,
+            front = { if (forward) drawImage(front) else mirrored(front) },
+            back = { if (forward) mirrored(back) else drawImage(back) })
+    }
+}
+
+/** Shadow colour on light pages: a warm brown, lighter than the design notes' rgb(46, 40, 20), so the shadow tints the paper rather than greying it. */
+private val SHADOW_INK = Color(0xFF6B5638)
+
+/** Px per shadow unit: Kotlin 4's sizes are dp on a 390 dp page, so they scale with the page width. */
+fun shadowUnit(pageWidthPx: Float): Float = pageWidthPx / 390f
 
 /** How far the cast shadow reaches past the paper edge, in dp (where it has faded to nothing). */
 private const val CAST_REACH_DP = 48f
@@ -229,7 +285,7 @@ private const val CAST_REACH_DP = 48f
 private fun castShadowAlpha(x: Float, k: Float): Float {
     fun tail(off: Float, sigma: Float) = 1f / (1f + kotlin.math.exp(1.702f * (x - off) / sigma))
     fun stack(a: Float, b: Float) = 1f - (1f - a) * (1f - b)
-    val a = stack(0.34f * tail(12f, 13f), 0.22f * stack(tail(2f, 2.5f), 0.34f * tail(14f, 13f)))
+    val a = stack(0.34f * tail(12f, 13f), 0.22f * tail(2f, 2.5f))
     return (a * k).coerceAtMost(0.85f)
 }
 
@@ -237,16 +293,21 @@ private fun castShadowAlpha(x: Float, k: Float): Float {
 private const val STRIPS = 22
 private const val FAR = 100_000f
 
-/** Below Android 13: the page cut into strips parallel to the curl line, each squeezed to follow the roll. */
-private fun DrawScope.drawCurlStrips(page: ImageBitmap, curl: Curl, paper: Color, shade: Color, k: Float) {
+/**
+ * Below Android 13: the page cut into strips parallel to the curl line, each squeezed to follow the
+ * roll. [front] and [back] paint the two faces of the sheet, in the sheet's own coordinates.
+ */
+private fun DrawScope.drawCurlStrips(
+    curl: Curl, pageSize: Size, paper: Color, shade: Color, k: Float,
+    front: DrawScope.() -> Unit, back: DrawScope.() -> Unit,
+) {
     val half = PI_F * curl.radius / 2f
-    val pageSize = Size(page.width.toFloat(), page.height.toFloat())
 
     // shadow cast on the next page beyond the standing edge, where the roll has paper
     val span = vSpanPast(curl, pageSize, min(curl.radius, 1f))
     if (span != null) {
         rotate(curl.angleDeg, pivot = Offset.Zero) {
-            val reach = CAST_REACH_DP * density
+            val reach = CAST_REACH_DP * shadowUnit(pageSize.width)
             val stops = Array(13) { i ->
                 val f = i / 12f
                 f to shade.copy(alpha = castShadowAlpha(f * CAST_REACH_DP, k))
@@ -258,28 +319,28 @@ private fun DrawScope.drawCurlStrips(page: ImageBitmap, curl: Curl, paper: Color
         }
     }
     // 1. flat part
-    drawStrip(curl, page, -FAR, 0f, 1f, null, 0f, pageSize)
+    drawStrip(curl, -FAR, 0f, 0f, pageSize, front)
     // 2. front, going up the roll (darkening a little towards the standing edge)
     for (i in 0 until STRIPS) {
         val a = half * i / STRIPS
         val dRel = sin((a + half / STRIPS / 2f) / curl.radius) // d / r
         val rim = 0.13f * max(0f, 1f - (1f - dRel) / 0.4f).pow(2)
-        drawStrip(curl, page, a, a + half / STRIPS, 1f, null, rim, pageSize)
+        drawStrip(curl, a, a + half / STRIPS, rim, pageSize, front)
     }
-    // 3. back, coming over the top: paper with the print showing through faintly, shaded at the edge
+    // 3. back, coming over the top, shaded at the edge
     for (i in 0 until STRIPS) {
         val a = half + half * i / STRIPS
         val turn = (a + half / STRIPS / 2f) / curl.radius // angle round the roll, π/2 … π
         val u = 1f - (PI_F - turn) / (PI_F / 2f)
         val sh = 0.26f * max(0f, 1f - u / 0.45f).pow(1.6f)
-        drawStrip(curl, page, a, a + half / STRIPS, 0.24f, paper, sh, pageSize)
+        drawStrip(curl, a, a + half / STRIPS, sh, pageSize, back)
     }
     // 4. flat, face down
-    drawStrip(curl, page, 2 * half, FAR, 0.24f, paper, 0f, pageSize)
+    drawStrip(curl, 2 * half, FAR, 0f, pageSize, back)
 }
 
 /** The paper from a to b past the contact line, drawn where the roll puts it. */
-private fun DrawScope.drawStrip(curl: Curl, page: ImageBitmap, a: Float, b: Float, ink: Float, paper: Color?, darken: Float, pageSize: Size) {
+private fun DrawScope.drawStrip(curl: Curl, a: Float, b: Float, darken: Float, pageSize: Size, texture: DrawScope.() -> Unit) {
     // squeeze along n; a negative k mirrors the strip
     val ga = if (a <= -FAR / 2) a else curl.g(a)
     val gb = if (b >= FAR / 2) PI_F * curl.radius - b else curl.g(b)
@@ -297,8 +358,7 @@ private fun DrawScope.drawStrip(curl: Curl, page: ImageBitmap, a: Float, b: Floa
         rotate(curl.angleDeg, pivot = Offset.Zero) { // x now runs along n
             clipRect(curl.contact + a - 0.6f, -FAR, curl.contact + b + 0.6f, FAR) {
                 rotate(-curl.angleDeg, pivot = Offset.Zero) {
-                    if (paper != null) drawRect(paper, size = pageSize)
-                    drawImage(page, alpha = ink)
+                    texture()
                     if (darken > 0.003f) drawRect(Color.Black.copy(alpha = darken), size = pageSize)
                 }
             }

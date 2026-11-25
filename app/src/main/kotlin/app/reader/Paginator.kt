@@ -41,18 +41,51 @@ class Page(
     var chapterPageCount: Int = 1
 }
 
+/** Where a page sits: alone on the screen, or the left or right page of a two-page spread. */
+enum class PageSide { Single, Left, Right }
+
 /** Size and margins of a page, in pixels. */
 class PageSpec(
     val width: Float, val height: Float, val density: Float, val settings: ReaderSettings, val rtl: Boolean = false,
     /** System bars drawn over the page (the reader is full screen); text stays clear of them. */
     val insetTop: Float = 0f, val insetBottom: Float = 0f,
+    /** Two pages side by side on the screen; [width] is one of them. */
+    val spread: Boolean = false,
+    /** The whole screen, which sets the margins: phone, phone on its side, or tablet. */
+    val screenWidth: Float = width, val screenHeight: Float = height,
 ) {
+    private val dpW = screenWidth / density
+    private val dpH = screenHeight / density
+    /** A tablet: the short side is at least 600 dp. */
+    val tablet = minOf(dpW, dpH) >= 600f
+    /** A phone on its side. */
+    val compactHeight = dpH < 480f
+    // header, top margin, bottom margin, footer (dp), as in the design for each kind of screen
+    private val v = when {
+        tablet && dpW > dpH -> floatArrayOf(60f, 112f, 120f, 52f)
+        tablet -> floatArrayOf(76f, 136f, 136f, 76f)
+        compactHeight -> floatArrayOf(32f, 62f, 64f, 32f)
+        else -> floatArrayOf(22f, 64f, 56f, 26f)
+    }
+    /** Centre lines of the running header and the page number, from the top and the bottom. */
+    val headerY = v[0] * density + insetTop
+    val footerY = v[3] * density + insetBottom
+
     val marginH = ((ReaderSettings.BASE_MARGIN_DP + HTML_SIDE_MARGIN_DP) * density + width * settings.effectiveMargin / 100f)
+        .let { if (tablet) maxOf(it, width * (if (spread) 0.125f else 0.14f)) else it } // the boards: 80 of 640 dp, 112 of 800 dp
         .coerceAtLeast(8f * density)
-    val marginTop = 64f * density + insetTop
-    val marginBottom = 56f * density + insetBottom
+    val marginTop = v[1] * density + insetTop
+    val marginBottom = v[2] * density + insetBottom
+    /** On a narrow spread the margins at the spine are half the outer ones, as in a printed book. */
+    private val narrowSpread = spread && width / density < 500f
+    /** How far a page's text moves sideways from the centred position, by side of the spread. */
+    fun shift(side: PageSide) = when (side) {
+        PageSide.Single -> 0f
+        PageSide.Left -> if (narrowSpread) marginH / 3f else 0f
+        PageSide.Right -> if (narrowSpread) -marginH / 3f else 0f
+    }
     val columns = when {
-        settings.pageTurn == PageTurn.Scroll -> 1
+        spread || settings.pageTurn == PageTurn.Scroll -> 1
         settings.columns == Columns.One -> 1
         settings.columns == Columns.Two -> if (width / density >= 480f) 2 else 1
         else -> if (width > height * 1.05f && width / density >= 640f) 2 else 1
@@ -64,7 +97,8 @@ class PageSpec(
     fun columnX(c: Int) = marginH + c * (columnWidth + gap)
 
     fun sameLayout(o: PageSpec) = width == o.width && height == o.height && density == o.density &&
-        insetTop == o.insetTop && insetBottom == o.insetBottom &&
+        insetTop == o.insetTop && insetBottom == o.insetBottom && spread == o.spread &&
+        screenWidth == o.screenWidth && screenHeight == o.screenHeight &&
         settings.layoutKey() == o.settings.layoutKey()
 
     companion object {

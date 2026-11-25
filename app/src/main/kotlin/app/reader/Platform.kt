@@ -164,15 +164,15 @@ object BookStore {
 private object CurlShader {
     val shader: RuntimeShader? by lazy { runCatching { RuntimeShader(CURL_SHADER) }.getOrNull() }
     val paint = android.graphics.Paint()
-    private var lastImage: ImageBitmap? = null
-    private var lastPageShader: BitmapShader? = null
+    // the last two pictures' shaders (front and back of a two-page turn)
+    private val cache = ArrayList<Pair<ImageBitmap, BitmapShader>>(2)
 
     fun pageShader(img: ImageBitmap): BitmapShader {
-        if (img !== lastImage || lastPageShader == null) {
-            lastImage = img
-            lastPageShader = BitmapShader(img.asAndroidBitmap(), Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
-        }
-        return lastPageShader!!
+        cache.firstOrNull { it.first === img }?.let { return it.second }
+        val s = BitmapShader(img.asAndroidBitmap(), Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
+        if (cache.size >= 2) cache.removeAt(0)
+        cache += img to s
+        return s
     }
 }
 
@@ -181,10 +181,15 @@ private object CurlShader {
  * there is no runtime shader, so the caller draws the strip fallback instead.
  */
 @SuppressLint("NewApi")
-fun DrawScope.drawCurlWithShader(page: ImageBitmap, curl: Curl, paper: Color, shade: Color, shadowStrength: Float): Boolean {
+fun DrawScope.drawCurlWithShader(
+    page: ImageBitmap, curl: Curl, paper: Color, shade: Color, shadowStrength: Float,
+    back: ImageBitmap? = null, dir: Float = 0f,
+): Boolean {
     if (Build.VERSION.SDK_INT < 33) return false
     val sh = CurlShader.shader ?: return false
     sh.setInputShader("page", CurlShader.pageShader(page))
+    sh.setInputShader("back", CurlShader.pageShader(back ?: page))
+    sh.setFloatUniform("dir", dir)
     sh.setFloatUniform("size", page.width.toFloat(), page.height.toFloat())
     sh.setFloatUniform("n", curl.nx, curl.ny)
     sh.setFloatUniform("pos", curl.position)
@@ -192,7 +197,7 @@ fun DrawScope.drawCurlWithShader(page: ImageBitmap, curl: Curl, paper: Color, sh
     sh.setFloatUniform("paper", paper.red, paper.green, paper.blue)
     sh.setFloatUniform("shade", shade.red, shade.green, shade.blue)
     sh.setFloatUniform("shadowK", shadowStrength)
-    sh.setFloatUniform("dp", density)
+    sh.setFloatUniform("dp", shadowUnit(page.width.toFloat()))
     val paint = CurlShader.paint
     paint.shader = sh
     drawIntoCanvas { it.nativeCanvas.drawRect(0f, 0f, size.width, size.height, paint) }

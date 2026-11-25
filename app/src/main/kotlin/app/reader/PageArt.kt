@@ -6,6 +6,9 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Canvas
+import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.CanvasDrawScope
@@ -36,21 +39,33 @@ fun DrawScope.drawPage(
     pictures: (String) -> ImageBitmap?,
     marks: List<Highlight> = emptyList(),
     pageDark: Boolean = false,
+    side: PageSide = PageSide.Single,
 ) {
     drawRect(colors.page)
+    val dx = spec.shift(side)
+    val centre = spec.marginH + dx + spec.contentWidth / 2f
     val small = TextStyle(fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.Medium, fontFamily = FontFamily.SansSerif,
         color = colors.secondary, textAlign = TextAlign.Center)
     val dp = density
     if (header.isNotEmpty()) {
         val l = measurer.measure(header, small, maxLines = 1, overflow = TextOverflow.Ellipsis,
-            constraints = Constraints(maxWidth = (size.width * 0.7f).toInt().coerceAtLeast(1)))
-        drawText(l, topLeft = Offset((size.width - l.size.width) / 2f, spec.insetTop + 22f * dp - l.size.height / 2f))
+            constraints = Constraints(maxWidth = minOf(spec.width * 0.7f, spec.contentWidth).toInt().coerceAtLeast(1)))
+        drawText(l, topLeft = Offset(centre - l.size.width / 2f, spec.headerY - l.size.height / 2f))
     }
     if (footer.isNotEmpty()) {
         val l = measurer.measure(footer, small, maxLines = 1)
-        drawText(l, topLeft = Offset((size.width - l.size.width) / 2f, size.height - spec.insetBottom - 26f * dp - l.size.height / 2f))
+        drawText(l, topLeft = Offset(centre - l.size.width / 2f, spec.height - spec.footerY - l.size.height / 2f))
     }
-    if (page != null) drawColumns(page, spec, colors, spec.marginTop, pictures, marks, pageDark)
+    if (page != null) translate(left = dx) { drawColumns(page, spec, colors, spec.marginTop, pictures, marks, pageDark) }
+    // a faint shadow along the spine of a two-page spread
+    if (side != PageSide.Single) {
+        val w = (if (spec.tablet) 24f else 16f) * dp
+        val shade = if (pageDark) Color.Black.copy(alpha = 0.18f) else Color(0x0D3C280A)
+        val clear = shade.copy(alpha = 0f)
+        if (side == PageSide.Left) drawRect(Brush.horizontalGradient(listOf(clear, shade), startX = spec.width - w, endX = spec.width),
+            Offset(spec.width - w, 0f), Size(w, spec.height))
+        else drawRect(Brush.horizontalGradient(listOf(shade, clear), startX = 0f, endX = w), Offset.Zero, Size(w, spec.height))
+    }
 }
 
 fun DrawScope.drawColumns(

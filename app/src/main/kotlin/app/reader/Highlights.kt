@@ -156,11 +156,11 @@ fun EpubBook.textOf(span: TextSpan): String {
 // ---------------------------------------------------------------- page geometry
 
 /** Where text sits on a laid-out page: hit testing and the boxes behind a span of text. */
-class PageText(private val page: Page, private val spec: PageSpec, private val top: Float) {
+class PageText(private val page: Page, private val spec: PageSpec, private val top: Float, private val dx: Float = 0f) {
     private class Hit(val f: Frag.Lines, val x0: Float)
 
     private fun lines(): Sequence<Hit> = sequence {
-        page.columns.forEachIndexed { c, frags -> frags.forEach { if (it is Frag.Lines) yield(Hit(it, spec.columnX(c))) } }
+        page.columns.forEachIndexed { c, frags -> frags.forEach { if (it is Frag.Lines) yield(Hit(it, spec.columnX(c) + dx)) } }
     }
 
     /** The character under [pos]; with [nearest], the closest one on the page when [pos] is between lines. */

@@ -42,6 +42,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.displayCutout
+import androidx.compose.foundation.layout.union
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
@@ -80,57 +87,95 @@ private fun pct(x: Float) = "${(x * 100).roundToInt()}%"
 @Composable
 fun ThemesSheet(settings: ReaderSettings, uiDark: Boolean, onChange: (ReaderSettings) -> Unit, onCustomise: () -> Unit, onDismiss: () -> Unit) {
     val jr = LocalJr.current
-    JrSheet(onDismiss) {
-        SheetTitle("Themes and settings", onDismiss)
+    val conf = LocalConfiguration.current
+    val short = conf.screenHeightDp < 480
+    val sideways = conf.screenWidthDp > conf.screenHeightDp && conf.screenWidthDp >= 600
+    val size: @Composable () -> Unit = {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("A", style = JrType.label, color = jr.onVariant, textAlign = TextAlign.Center, modifier = Modifier.width(24.dp))
+            JrSlider(settings.sizeStep / 11f, "Text size", Modifier.weight(1f), steps = 12) {
+                val step = (it * 11).roundToInt()
+                if (step != settings.sizeStep) onChange(settings.copy(sizeStep = step))
+            }
+            Text("A", style = JrType.sans(22, 24, FontWeight.Medium), color = jr.onVariant, textAlign = TextAlign.Center, modifier = Modifier.width(24.dp))
+        }
+    }
+    val brightness: @Composable () -> Unit = {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Box(Modifier.width(24.dp), contentAlignment = Alignment.Center) { Icon(JrIcons.Sun, null, tint = jr.onVariant, modifier = Modifier.size(18.dp)) }
+            JrSlider(if (settings.brightness < 0f) 0.5f else settings.brightness, "Brightness", Modifier.weight(1f)) {
+                onChange(settings.copy(brightness = it.coerceIn(0.02f, 1f)))
+            }
+            Box(Modifier.width(24.dp), contentAlignment = Alignment.Center) { Icon(JrIcons.Sun, null, tint = jr.onVariant, modifier = Modifier.size(24.dp)) }
+        }
+    }
+    val appearance: @Composable () -> Unit = {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            SectionLabel("Appearance")
+            Segmented(Appearance.entries.map { it.label }, settings.appearance.ordinal) { onChange(settings.copy(appearance = Appearance.entries[it])) }
+        }
+    }
+    val pageTurn: @Composable () -> Unit = {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            SectionLabel("Page turn")
+            Segmented(PageTurn.entries.map { it.label }, settings.pageTurn.ordinal) { onChange(settings.copy(pageTurn = PageTurn.entries[it])) }
+        }
+    }
+    val themes: @Composable () -> Unit = {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            SectionLabel("Theme")
+            for (row in ReaderTheme.entries.chunked(3)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    for (t in row) ThemeTile(t, t == settings.theme, Modifier.weight(1f), short) { onChange(settings.withTheme(t)) }
+                }
+            }
+        }
+    }
+    val customise: @Composable () -> Unit = {
+        Row(Modifier.fillMaxWidth().height(if (short) 44.dp else 48.dp).clip(RoundedCornerShape(24.dp)).background(jr.secondaryContainer)
+            .clickable(onClick = onCustomise).padding(start = 20.dp, end = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("Customise theme", style = JrType.label, color = jr.onSecondaryContainer, modifier = Modifier.weight(1f))
+            Icon(JrIcons.ChevronRight, null, tint = jr.onSecondaryContainer, modifier = Modifier.size(24.dp))
+        }
+    }
+    val oneColumn: @Composable () -> Unit = {
         Column(Modifier.verticalScroll(rememberScrollState()).padding(start = 24.dp, end = 24.dp, bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("A", style = JrType.label, color = jr.onVariant, textAlign = TextAlign.Center, modifier = Modifier.width(24.dp))
-                JrSlider(settings.sizeStep / 11f, "Text size", Modifier.weight(1f), steps = 12) {
-                    val step = (it * 11).roundToInt()
-                    if (step != settings.sizeStep) onChange(settings.copy(sizeStep = step))
+            size(); brightness(); appearance(); pageTurn(); themes(); customise()
+        }
+    }
+    when {
+        // a phone on its side: a wide sheet in two columns
+        short -> JrSheet(onDismiss, maxWidth = 760.dp, scrim = false) {
+            SheetTitle("Themes and settings", onDismiss)
+            Row(Modifier.verticalScroll(rememberScrollState()).padding(start = 24.dp, end = 24.dp, bottom = 20.dp),
+                horizontalArrangement = Arrangement.spacedBy(32.dp)) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    size(); brightness(); appearance(); Spacer(Modifier.height(4.dp)); customise()
                 }
-                Text("A", style = JrType.sans(22, 24, FontWeight.Medium), color = jr.onVariant, textAlign = TextAlign.Center, modifier = Modifier.width(24.dp))
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) { pageTurn(); themes() }
             }
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Box(Modifier.width(24.dp), contentAlignment = Alignment.Center) { Icon(JrIcons.Sun, null, tint = jr.onVariant, modifier = Modifier.size(18.dp)) }
-                JrSlider(if (settings.brightness < 0f) 0.5f else settings.brightness, "Brightness", Modifier.weight(1f)) {
-                    onChange(settings.copy(brightness = it.coerceIn(0.02f, 1f)))
-                }
-                Box(Modifier.width(24.dp), contentAlignment = Alignment.Center) { Icon(JrIcons.Sun, null, tint = jr.onVariant, modifier = Modifier.size(24.dp)) }
-            }
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                SectionLabel("Appearance")
-                Segmented(Appearance.entries.map { it.label }, settings.appearance.ordinal) { onChange(settings.copy(appearance = Appearance.entries[it])) }
-            }
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                SectionLabel("Page turn")
-                Segmented(PageTurn.entries.map { it.label }, settings.pageTurn.ordinal) { onChange(settings.copy(pageTurn = PageTurn.entries[it])) }
-            }
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                SectionLabel("Theme")
-                for (row in ReaderTheme.entries.chunked(3)) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        for (t in row) ThemeTile(t, t == settings.theme, Modifier.weight(1f)) { onChange(settings.withTheme(t)) }
-                    }
-                }
-            }
-            Row(Modifier.fillMaxWidth().height(48.dp).clip(RoundedCornerShape(24.dp)).background(jr.secondaryContainer)
-                .clickable(onClick = onCustomise).padding(start = 20.dp, end = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("Customise theme", style = JrType.label, color = jr.onSecondaryContainer, modifier = Modifier.weight(1f))
-                Icon(JrIcons.ChevronRight, null, tint = jr.onSecondaryContainer, modifier = Modifier.size(24.dp))
-            }
+        }
+        // a tablet held sideways: beside the pages, which stay in view as they change
+        sideways -> JrSideSheet(onDismiss, fromLeft = false, scrim = false) {
+            Spacer(Modifier.height(28.dp))
+            SheetTitle("Themes and settings", onDismiss)
+            oneColumn()
+        }
+        else -> JrSheet(onDismiss, scrim = conf.smallestScreenWidthDp < 600) { // no scrim on a tablet, as designed
+            SheetTitle("Themes and settings", onDismiss)
+            oneColumn()
         }
     }
     uiDark.hashCode()
 }
 
 @Composable
-private fun ThemeTile(t: ReaderTheme, selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
+private fun ThemeTile(t: ReaderTheme, selected: Boolean, modifier: Modifier, short: Boolean = false, onClick: () -> Unit) {
     val jr = LocalJr.current
     val c = t.light
     val shape = RoundedCornerShape(12.dp)
-    Box(modifier.height(64.dp).clip(shape).background(c.page)
+    Box(modifier.height(if (short) 56.dp else 64.dp).clip(shape).background(c.page)
         .border(if (selected) 2.dp else 1.dp, if (selected) jr.primary else jr.outlineVariant, shape)
         .clickable(onClick = onClick)) {
         Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
@@ -151,27 +196,78 @@ fun CustomiseScreen(settings: ReaderSettings, colors: ThemeColors, onChange: (Re
     val jr = LocalJr.current
     var tab by remember { mutableStateOf(0) }
     fun set(s: ReaderSettings) = onChange(s.copy(customized = true))
+    val conf = LocalConfiguration.current
+    val short = conf.screenHeightDp < 480
+    val tablet = minOf(conf.screenWidthDp, conf.screenHeightDp) >= 600
+    val sideways = conf.screenWidthDp > conf.screenHeightDp
     BackAction(onBack = onDone)
-    Column(Modifier.fillMaxSize().background(jr.background).clickable(remember { MutableInteractionSource() }, indication = null) {}
-        .windowInsetsPadding(WindowInsets.statusBars)) {
-        Row(Modifier.fillMaxWidth().height(64.dp).padding(start = 4.dp, end = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconBtn(JrIcons.Close, "Close", jr.onBackground, onClick = onDone)
-            Text("Customise theme", style = JrType.headline, color = jr.onBackground, modifier = Modifier.weight(1f).padding(start = 4.dp))
-            Box(Modifier.height(40.dp).clip(RoundedCornerShape(20.dp)).background(jr.primary).clickable(onClick = onDone).padding(horizontal = 20.dp),
-                contentAlignment = Alignment.Center) { Text("Done", style = JrType.label, color = jr.onPrimary) }
+
+    val textSettings: @Composable () -> Unit = {
+        Row(Modifier.fillMaxWidth().height(56.dp).clickable(onClick = onFonts), verticalAlignment = Alignment.CenterVertically) {
+            Text("Font", style = JrType.bodyLarge, color = jr.onBackground, modifier = Modifier.weight(1f))
+            Text(settings.font.label, fontFamily = settings.font.familyOrDefault, fontSize = 16.sp, color = jr.onVariant)
+            Spacer(Modifier.width(8.dp))
+            Icon(JrIcons.ChevronRight, null, tint = jr.onVariant, modifier = Modifier.size(24.dp))
         }
-        // live preview in the reading theme
-        Box(Modifier.padding(horizontal = 16.dp).fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(colors.page)
+        Divider()
+        ValueRow("Text size", "${settings.fontSizePx.roundToInt()} pt")
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("A", style = JrType.label, color = jr.onVariant)
+            JrSlider(settings.sizeStep / 11f, "Text size", Modifier.weight(1f), steps = 12) {
+                val step = (it * 11).roundToInt()
+                if (step != settings.sizeStep) onChange(settings.copy(sizeStep = step))
+            }
+            Text("A", style = JrType.sans(22, 24, FontWeight.Medium), color = jr.onVariant)
+        }
+        Divider(Modifier.padding(top = 8.dp))
+        SwitchRow("Bold text", null, settings.bold) { set(settings.copy(bold = it)) }
+        Divider()
+        SwitchRow("Justify text", "Align both edges of each line", settings.justify) { set(settings.copy(justify = it)) }
+    }
+    val layoutSettings: @Composable () -> Unit = {
+        SwitchRow("Custom spacing", "Use these values instead of the book’s own", settings.customSpacing) { set(settings.copy(customSpacing = it)) }
+        Divider()
+        Column(Modifier.alpha(if (settings.customSpacing) 1f else 0.38f)) {
+            val on = settings.customSpacing
+            val lh = settings.effectiveLineHeight
+            ValueRow("Line spacing", fmt2(lh))
+            JrSlider((lh - ReaderSettings.LINE_HEIGHT_MIN) / (ReaderSettings.LINE_HEIGHT_MAX - ReaderSettings.LINE_HEIGHT_MIN), "Line spacing") {
+                if (on) set(settings.copy(lineHeight = ((ReaderSettings.LINE_HEIGHT_MIN + it * (ReaderSettings.LINE_HEIGHT_MAX - ReaderSettings.LINE_HEIGHT_MIN)) * 20).roundToInt() / 20f))
+            }
+            val ls = ReaderSettings.LETTER_SPACING_LIMIT
+            ValueRow("Character spacing", pct(settings.letterSpacing))
+            JrSlider((settings.letterSpacing + ls) / (2 * ls), "Character spacing") {
+                if (on) set(settings.copy(letterSpacing = ((it * 2 - 1) * ls * 100).roundToInt() / 100f))
+            }
+            val ws = ReaderSettings.WORD_SPACING_LIMIT
+            ValueRow("Word spacing", pct(settings.wordSpacing))
+            JrSlider((settings.wordSpacing + ws) / (2 * ws), "Word spacing") {
+                if (on) set(settings.copy(wordSpacing = ((it * 2 - 1) * ws * 20).roundToInt() / 20f))
+            }
+            val ml = ReaderSettings.MARGIN_ADJUST_LIMIT
+            ValueRow("Margins", "${settings.marginAdjust}%")
+            JrSlider((settings.marginAdjust + ml) / (2f * ml), "Margins", steps = 2 * ml + 1) {
+                if (on) set(settings.copy(marginAdjust = ((it * 2 - 1) * ml).roundToInt()))
+            }
+        }
+        SectionLabel("Columns", Modifier.padding(top = 16.dp, bottom = 8.dp))
+        Segmented(Columns.entries.map { it.label }, settings.columns.ordinal) { set(settings.copy(columns = Columns.entries[it])) }
+    }
+    /** The theme as it reads, in [lines] lines of the sample. */
+    val preview: @Composable (Modifier, Int) -> Unit = { m, lines ->
+        Box(m.clip(RoundedCornerShape(12.dp)).background(colors.page)
             .border(1.dp, jr.outlineVariant, RoundedCornerShape(12.dp)).padding(horizontal = 20.dp, vertical = 16.dp)) {
             val size = (settings.fontSizePx * 0.9f)
-            Text(SAMPLE, maxLines = 3, overflow = TextOverflow.Clip, color = colors.text, style = TextStyle(
+            Text(SAMPLE, maxLines = lines, overflow = TextOverflow.Clip, color = colors.text, style = TextStyle(
                 fontFamily = settings.font.familyOrDefault, fontSize = size.sp, lineHeight = (size * settings.effectiveLineHeight).sp,
                 fontWeight = if (settings.effectiveBold) FontWeight.Bold else FontWeight.Normal,
                 letterSpacing = settings.effectiveLetterSpacing.em,
                 textAlign = if (settings.justify) TextAlign.Justify else TextAlign.Start,
             ))
         }
-        Row(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+    }
+    val tabs: @Composable () -> Unit = {
+        Row(Modifier.fillMaxWidth()) {
             listOf("Text", "Layout").forEachIndexed { i, l ->
                 Box(Modifier.weight(1f).height(48.dp).clickable { tab = i }, contentAlignment = Alignment.Center) {
                     Text(l, style = JrType.label, color = if (tab == i) jr.primary else jr.onVariant)
@@ -181,61 +277,78 @@ fun CustomiseScreen(settings: ReaderSettings, colors: ThemeColors, onChange: (Re
             }
         }
         Divider()
-        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 8.dp)
-            .windowInsetsPadding(WindowInsets.navigationBars)) {
-            if (tab == 0) {
-                Row(Modifier.fillMaxWidth().height(56.dp).clickable(onClick = onFonts), verticalAlignment = Alignment.CenterVertically) {
-                    Text("Font", style = JrType.bodyLarge, color = jr.onBackground, modifier = Modifier.weight(1f))
-                    Text(settings.font.label, fontFamily = settings.font.familyOrDefault, fontSize = 16.sp, color = jr.onVariant)
-                    Spacer(Modifier.width(8.dp))
-                    Icon(JrIcons.ChevronRight, null, tint = jr.onVariant, modifier = Modifier.size(24.dp))
-                }
-                Divider()
-                ValueRow("Text size", "${settings.fontSizePx.roundToInt()} pt")
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("A", style = JrType.label, color = jr.onVariant)
-                    JrSlider(settings.sizeStep / 11f, "Text size", Modifier.weight(1f), steps = 12) {
-                        val step = (it * 11).roundToInt()
-                        if (step != settings.sizeStep) onChange(settings.copy(sizeStep = step))
-                    }
-                    Text("A", style = JrType.sans(22, 24, FontWeight.Medium), color = jr.onVariant)
-                }
-                Divider(Modifier.padding(top = 8.dp))
-                SwitchRow("Bold text", null, settings.bold) { set(settings.copy(bold = it)) }
-                Divider()
-                SwitchRow("Justify text", "Align both edges of each line", settings.justify) { set(settings.copy(justify = it)) }
-            } else {
-                SwitchRow("Custom spacing", "Use these values instead of the book’s own", settings.customSpacing) { set(settings.copy(customSpacing = it)) }
-                Divider()
-                Column(Modifier.alpha(if (settings.customSpacing) 1f else 0.38f)) {
-                    val on = settings.customSpacing
-                    val lh = settings.effectiveLineHeight
-                    ValueRow("Line spacing", fmt2(lh))
-                    JrSlider((lh - ReaderSettings.LINE_HEIGHT_MIN) / (ReaderSettings.LINE_HEIGHT_MAX - ReaderSettings.LINE_HEIGHT_MIN), "Line spacing") {
-                        if (on) set(settings.copy(lineHeight = ((ReaderSettings.LINE_HEIGHT_MIN + it * (ReaderSettings.LINE_HEIGHT_MAX - ReaderSettings.LINE_HEIGHT_MIN)) * 20).roundToInt() / 20f))
-                    }
-                    val ls = ReaderSettings.LETTER_SPACING_LIMIT
-                    ValueRow("Character spacing", pct(settings.letterSpacing))
-                    JrSlider((settings.letterSpacing + ls) / (2 * ls), "Character spacing") {
-                        if (on) set(settings.copy(letterSpacing = ((it * 2 - 1) * ls * 100).roundToInt() / 100f))
-                    }
-                    val ws = ReaderSettings.WORD_SPACING_LIMIT
-                    ValueRow("Word spacing", pct(settings.wordSpacing))
-                    JrSlider((settings.wordSpacing + ws) / (2 * ws), "Word spacing") {
-                        if (on) set(settings.copy(wordSpacing = ((it * 2 - 1) * ws * 20).roundToInt() / 20f))
-                    }
-                    val ml = ReaderSettings.MARGIN_ADJUST_LIMIT
-                    ValueRow("Margins", "${settings.marginAdjust}%")
-                    JrSlider((settings.marginAdjust + ml) / (2f * ml), "Margins", steps = 2 * ml + 1) {
-                        if (on) set(settings.copy(marginAdjust = ((it * 2 - 1) * ml).roundToInt()))
+    }
+    /** Close, title, Reset theme and Done, as the wide layouts have them. */
+    val header: @Composable (Modifier) -> Unit = { m ->
+        Row(m.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            IconBtn(JrIcons.Close, "Close without saving", jr.onBackground, onClick = onDone)
+            Text("Customise theme", style = JrType.headline, color = jr.onBackground, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            Box(Modifier.height(40.dp).clip(RoundedCornerShape(20.dp)).clickable { onChange(settings.resetTheme()) }.padding(horizontal = 12.dp),
+                contentAlignment = Alignment.Center) { Text("Reset theme", style = JrType.label, color = jr.error) }
+            Box(Modifier.height(40.dp).clip(RoundedCornerShape(20.dp)).background(jr.primary).clickable(onClick = onDone).padding(horizontal = 24.dp),
+                contentAlignment = Alignment.Center) { Text("Done", style = JrType.label, color = jr.onPrimary) }
+        }
+    }
+    val swallow = Modifier.clickable(remember { MutableInteractionSource() }, indication = null) {}
+
+    when {
+        // a phone on its side: the sample on the left, the settings beside it
+        short -> Column(Modifier.fillMaxSize().background(jr.background).then(swallow)
+            .windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout))) {
+            header(Modifier.height(56.dp).padding(start = 4.dp, end = 24.dp))
+            Row(Modifier.weight(1f).padding(start = 24.dp, bottom = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                preview(Modifier.width(240.dp).fillMaxHeight().padding(top = 8.dp), 12)
+                Column(Modifier.weight(1f)) {
+                    tabs()
+                    Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 8.dp)) {
+                        if (tab == 0) textSettings() else layoutSettings()
                     }
                 }
-                SectionLabel("Columns", Modifier.padding(top = 16.dp, bottom = 8.dp))
-                Segmented(Columns.entries.map { it.label }, settings.columns.ordinal) { set(settings.copy(columns = Columns.entries[it])) }
             }
-            Text("Reset theme", style = JrType.label, color = jr.error,
-                modifier = Modifier.padding(top = 20.dp, bottom = 24.dp).clip(RoundedCornerShape(8.dp))
-                    .clickable { onChange(settings.resetTheme()) }.padding(vertical = 8.dp))
+        }
+        // a tablet: a dialog over the pages; side by side when held sideways
+        tablet -> Box(Modifier.fillMaxSize().background(jr.scrim).clickable(remember { MutableInteractionSource() }, indication = null, onClick = onDone)
+            .windowInsetsPadding(WindowInsets.systemBars), contentAlignment = Alignment.Center) {
+            Column(Modifier.then(if (sideways) Modifier.padding(24.dp).widthIn(max = 1000.dp).heightIn(max = 728.dp).fillMaxSize() else Modifier.padding(24.dp).width(640.dp).heightIn(max = 1056.dp).fillMaxHeight())
+                .clip(RoundedCornerShape(28.dp)).background(jr.sheet).then(swallow)) {
+                header(Modifier.height(72.dp).padding(start = 12.dp, end = 24.dp))
+                preview(Modifier.padding(horizontal = 24.dp).fillMaxWidth(), 3)
+                if (sideways) {
+                    Row(Modifier.weight(1f).padding(top = 8.dp)) {
+                        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 8.dp)) {
+                            SectionLabel("Text", Modifier.padding(top = 12.dp)); textSettings()
+                        }
+                        Box(Modifier.padding(top = 16.dp, bottom = 24.dp).width(1.dp).fillMaxHeight().background(jr.outlineVariant))
+                        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 8.dp)) {
+                            SectionLabel("Layout", Modifier.padding(top = 12.dp)); layoutSettings()
+                        }
+                    }
+                } else {
+                    Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 8.dp)) {
+                        SectionLabel("Text", Modifier.padding(top = 12.dp)); textSettings()
+                        SectionLabel("Layout", Modifier.padding(top = 24.dp)); layoutSettings()
+                        Spacer(Modifier.height(24.dp))
+                    }
+                }
+            }
+        }
+        else -> Column(Modifier.fillMaxSize().background(jr.background).then(swallow).windowInsetsPadding(WindowInsets.statusBars)) {
+            Row(Modifier.fillMaxWidth().height(64.dp).padding(start = 4.dp, end = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                IconBtn(JrIcons.Close, "Close", jr.onBackground, onClick = onDone)
+                Text("Customise theme", style = JrType.headline, color = jr.onBackground, modifier = Modifier.weight(1f).padding(start = 4.dp))
+                Box(Modifier.height(40.dp).clip(RoundedCornerShape(20.dp)).background(jr.primary).clickable(onClick = onDone).padding(horizontal = 20.dp),
+                    contentAlignment = Alignment.Center) { Text("Done", style = JrType.label, color = jr.onPrimary) }
+            }
+            // live preview in the reading theme
+            preview(Modifier.padding(horizontal = 16.dp).fillMaxWidth(), 3)
+            Box(Modifier.padding(top = 8.dp)) { Column { tabs() } }
+            Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 8.dp)
+                .windowInsetsPadding(WindowInsets.navigationBars)) {
+                if (tab == 0) textSettings() else layoutSettings()
+                Text("Reset theme", style = JrType.label, color = jr.error,
+                    modifier = Modifier.padding(top = 20.dp, bottom = 24.dp).clip(RoundedCornerShape(8.dp))
+                        .clickable { onChange(settings.resetTheme()) }.padding(vertical = 8.dp))
+            }
         }
     }
 }
@@ -290,6 +403,7 @@ fun ContentsSheet(
     onPick: (Int) -> Unit, onPickLocator: (Locator) -> Unit, onDismiss: () -> Unit,
     marks: List<Highlight> = emptyList(), place: (Highlight) -> String = { "" },
     onNote: (Highlight) -> Unit = {}, onCopy: (Highlight) -> Unit = {}, onRemove: (Highlight) -> Unit = {},
+    step: Int = 1,
 ) {
     val jr = LocalJr.current
     var tab by remember { mutableStateOf(0) }
@@ -297,17 +411,35 @@ fun ContentsSheet(
     @Suppress("UNUSED_VARIABLE") val version = controller.metaVersion
     val bookmarks = controller.bookmarks(shelf)
     val pages = pg.pages.size
-    JrSheet(onDismiss, fullHeightTop = 60.dp) {
-        Row(Modifier.fillMaxWidth().padding(start = 24.dp, end = 12.dp, bottom = 16.dp), verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-            BookCover(shelf, Modifier.size(40.dp, 60.dp), showText = false, corner = 3.dp)
-            Column(Modifier.weight(1f)) {
-                Text(book.title, style = JrType.headline, color = jr.onBackground, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                if (book.author.isNotBlank()) Text(book.author, style = JrType.body, color = jr.onVariant, maxLines = 1)
+    val conf = LocalConfiguration.current
+    val wide = conf.screenWidthDp >= 600
+    val short = conf.screenHeightDp < 480
+    val body: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit = {
+        if (short) {
+            // a phone on its side: one compact row
+            Row(Modifier.fillMaxWidth().height(56.dp).padding(start = 24.dp, end = 4.dp, top = 4.dp), verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                BookCover(shelf, Modifier.size(28.dp, 42.dp), showText = false, corner = 2.dp)
+                Text(book.title, style = JrType.title, color = jr.onBackground, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                if (!goTo) Box(Modifier.height(32.dp).clip(RoundedCornerShape(8.dp)).border(1.dp, jr.outlineVariant, RoundedCornerShape(8.dp))
+                    .clickable { goTo = true }.padding(horizontal = 16.dp), contentAlignment = Alignment.Center) {
+                    Text("Go to page", style = JrType.label, color = jr.onBackground)
+                }
+                IconBtn(JrIcons.Close, "Close contents", jr.onBackground, onClick = onDismiss)
             }
-            IconBtn(JrIcons.Close, "Close contents", jr.onBackground, onClick = onDismiss)
+        } else {
+            if (wide) Spacer(Modifier.height(28.dp))
+            Row(Modifier.fillMaxWidth().padding(start = 24.dp, end = 12.dp, bottom = 16.dp), verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                BookCover(shelf, Modifier.size(40.dp, 60.dp), showText = false, corner = 3.dp)
+                Column(Modifier.weight(1f)) {
+                    Text(book.title, style = JrType.headline, color = jr.onBackground, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    if (book.author.isNotBlank()) Text(book.author, style = JrType.body, color = jr.onVariant, maxLines = 1)
+                }
+                IconBtn(JrIcons.Close, "Close contents", jr.onBackground, onClick = onDismiss)
+            }
         }
-        Row(Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically,
+        if (!short || goTo) Row(Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             if (goTo) {
                 var text by remember { mutableStateOf("") }
@@ -326,7 +458,8 @@ fun ContentsSheet(
                 Box(Modifier.height(40.dp).clip(RoundedCornerShape(20.dp)).background(jr.primary).clickable { go() }.padding(horizontal = 20.dp),
                     contentAlignment = Alignment.Center) { Text("Go", style = JrType.label, color = jr.onPrimary) }
             } else {
-                Text("Page ${current + 1} of $pages · ${((current + 1) * 100f / pages).roundToInt()}%", style = JrType.body, color = jr.onVariant,
+                val where = if (step > 1 && current + 1 < pages) "Pages ${current + 1}–${current + 2}" else "Page ${current + 1}"
+                Text("$where of $pages · ${((current + 1) * 100f / pages).roundToInt()}%", style = JrType.body, color = jr.onVariant,
                     modifier = Modifier.weight(1f))
                 Box(Modifier.height(32.dp).clip(RoundedCornerShape(8.dp)).border(1.dp, jr.outlineVariant, RoundedCornerShape(8.dp))
                     .clickable { goTo = true }.padding(horizontal = 16.dp), contentAlignment = Alignment.Center) {
@@ -394,6 +527,8 @@ fun ContentsSheet(
             }
         }
     }
+    if (wide) JrSideSheet(onDismiss, fromLeft = true, width = if (short) 420.dp else 400.dp, content = body)
+    else JrSheet(onDismiss, fullHeightTop = 60.dp, content = body)
 }
 
 // ---------------------------------------------------------------- search in book

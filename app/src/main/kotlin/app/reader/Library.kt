@@ -41,6 +41,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.foundation.layout.displayCutout
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.draw.clip
@@ -72,29 +79,54 @@ fun Library(controller: AppController) {
         .maxByOrNull { controller.lastOpened(it) }
     val grid = controller.view == ShelfView.Grid
     val navBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+    // screen size, as the design has it: phone, phone on its side (short), tablet
+    val conf = LocalConfiguration.current
+    val short = conf.screenHeightDp < 480
+    val tablet = minOf(conf.screenWidthDp, conf.screenHeightDp) >= 600
+    val sideways = conf.screenWidthDp > conf.screenHeightDp && conf.screenWidthDp >= 600
+    val edge = if (tablet) 32.dp else 24.dp
+    val columns = when {
+        !grid -> GridCells.Fixed(1)
+        short || (tablet && conf.screenWidthDp >= 1000) -> GridCells.Fixed(6)
+        conf.screenWidthDp >= 600 -> GridCells.Fixed(4)
+        else -> GridCells.Adaptive(150.dp)
+    }
 
     Box(Modifier.fillMaxSize().background(jr.background)) {
-        Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.statusBars)) {
+        Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.statusBars)
+            .windowInsetsPadding(WindowInsets.displayCutout.union(WindowInsets.navigationBars).only(WindowInsetsSides.Horizontal))) {
             TopBar(controller, searching, query, onQuery = { query = it }, onSearch = { searching = it; if (!it) query = "" },
-                onGoal = { goalDialog = true })
+                onGoal = { goalDialog = true }, start = edge, height = if (short) 48.dp else 64.dp)
             LazyVerticalGrid(
-                columns = if (grid) GridCells.Adaptive(150.dp) else GridCells.Fixed(1),
+                columns = columns,
                 modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(start = if (grid) 24.dp else 0.dp, end = if (grid) 24.dp else 0.dp, bottom = 24.dp + navBottom),
-                horizontalArrangement = Arrangement.spacedBy(16.dp),
-                verticalArrangement = Arrangement.spacedBy(if (grid) 20.dp else 0.dp),
+                contentPadding = PaddingValues(start = if (grid) edge else 0.dp, end = if (grid) edge else 0.dp, bottom = 24.dp + navBottom),
+                horizontalArrangement = Arrangement.spacedBy(if (tablet) 24.dp else 16.dp),
+                verticalArrangement = Arrangement.spacedBy(if (grid) (if (tablet) 28.dp else 20.dp) else 0.dp),
             ) {
                 val full: androidx.compose.foundation.lazy.grid.LazyGridItemSpanScope.() -> GridItemSpan = { GridItemSpan(maxLineSpan) }
                 if (!searching) {
+                    val inset = Modifier.padding(horizontal = if (grid) 0.dp else 16.dp)
                     if (controller.update != UpdateState.Idle) item(span = full) {
-                        UpdateCard(controller, Modifier.padding(horizontal = if (grid) 0.dp else 16.dp).padding(top = 8.dp, bottom = if (grid) 0.dp else 12.dp))
+                        UpdateCard(controller, inset.padding(top = 8.dp, bottom = if (grid) 0.dp else 12.dp))
                     }
-                    if (current != null) item(span = full) {
-                        ContinueCard(controller, current, Modifier.padding(horizontal = if (grid) 0.dp else 16.dp).padding(top = 8.dp, bottom = if (grid) 0.dp else 12.dp))
-                    }
-                    item(span = full) {
-                        GoalCard(controller, Modifier.padding(horizontal = if (grid) 0.dp else 16.dp)
-                            .padding(top = if (current != null) 0.dp else 8.dp, bottom = if (grid) 0.dp else 12.dp)) { goalDialog = true }
+                    if (sideways) item(span = full) {
+                        // side by side when the screen is wide and held sideways
+                        Row(inset.padding(top = if (short) 4.dp else 8.dp, bottom = if (grid) 0.dp else 12.dp).height(androidx.compose.foundation.layout.IntrinsicSize.Min),
+                            horizontalArrangement = Arrangement.spacedBy(if (tablet) 24.dp else 16.dp)) {
+                            if (current != null) {
+                                if (short) CompactContinueCard(controller, current, Modifier.weight(3f))
+                                else ContinueCard(controller, current, Modifier.weight(3f))
+                            }
+                            GoalCard(controller, Modifier.weight(2f).fillMaxHeight(), tall = current != null) { goalDialog = true }
+                        }
+                    } else {
+                        if (current != null) item(span = full) {
+                            ContinueCard(controller, current, inset.padding(top = 8.dp, bottom = if (grid) 0.dp else 12.dp))
+                        }
+                        item(span = full) {
+                            GoalCard(controller, inset.padding(top = if (current != null) 0.dp else 8.dp, bottom = if (grid) 0.dp else 12.dp)) { goalDialog = true }
+                        }
                     }
                 }
                 item(span = full) {
@@ -115,10 +147,13 @@ fun Library(controller: AppController) {
 }
 
 @Composable
-private fun TopBar(controller: AppController, searching: Boolean, query: String, onQuery: (String) -> Unit, onSearch: (Boolean) -> Unit, onGoal: () -> Unit) {
+private fun TopBar(
+    controller: AppController, searching: Boolean, query: String, onQuery: (String) -> Unit, onSearch: (Boolean) -> Unit, onGoal: () -> Unit,
+    start: androidx.compose.ui.unit.Dp = 24.dp, height: androidx.compose.ui.unit.Dp = 64.dp,
+) {
     val jr = LocalJr.current
     var menu by remember { mutableStateOf(false) }
-    Row(Modifier.fillMaxWidth().height(64.dp).padding(start = if (searching) 4.dp else 24.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().height(height).padding(start = if (searching) 4.dp else start, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
         if (searching) {
             BackAction { onSearch(false) }
             IconBtn(JrIcons.Back, "Close search", jr.onBackground) { onSearch(false) }
@@ -192,6 +227,33 @@ private fun ContinueCard(controller: AppController, b: ShelfBook, modifier: Modi
     }
 }
 
+/** Continue reading on a phone held sideways: one short row with the Resume button, as in the design. */
+@Composable
+private fun CompactContinueCard(controller: AppController, b: ShelfBook, modifier: Modifier) {
+    val jr = LocalJr.current
+    val progress = controller.progress(b) ?: 0f
+    val pct = (progress * 100).roundToInt()
+    Row(modifier.height(84.dp).clip(RoundedCornerShape(12.dp)).background(jr.container)
+        .clickable { controller.reading = b }.padding(start = 12.dp, end = 16.dp)
+        .semantics { contentDescription = "Resume ${b.title}, $pct% read" },
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+        BookCover(b, Modifier.width(40.dp).height(60.dp), showText = false, corner = 3.dp)
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(b.title, style = JrType.serif(16, 22), color = jr.onBackground, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(listOfNotNull("Continue", controller.chapterTitle(b)).joinToString(" · "), style = JrType.caption, color = jr.onVariant,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Row(Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                StopProgress(progress, Modifier.weight(1f))
+                Text("$pct%", style = JrType.sans(11, 16, FontWeight.Medium), color = jr.onVariant)
+            }
+        }
+        Box(Modifier.height(40.dp).clip(RoundedCornerShape(20.dp)).background(jr.primary).clickable { controller.reading = b }
+            .padding(horizontal = 20.dp), contentAlignment = Alignment.Center) {
+            Text("Resume", style = JrType.label, color = jr.onPrimary)
+        }
+    }
+}
+
 /** An app update, as in the design: available, downloading, ready to install, or what went wrong. */
 @Composable
 private fun UpdateCard(controller: AppController, modifier: Modifier) {
@@ -256,12 +318,12 @@ private fun UpdateCard(controller: AppController, modifier: Modifier) {
 }
 
 @Composable
-private fun GoalCard(controller: AppController, modifier: Modifier, onClick: () -> Unit) {
+private fun GoalCard(controller: AppController, modifier: Modifier, tall: Boolean = false, onClick: () -> Unit) {
     val jr = LocalJr.current
     val goal = controller.goalMinutes
     val minutes = controller.secondsToday() / 60
     val streak = controller.streak()
-    Row(modifier.fillMaxWidth().height(64.dp).clip(RoundedCornerShape(12.dp)).border(1.dp, jr.outlineVariant, RoundedCornerShape(12.dp))
+    Row(modifier.fillMaxWidth().let { if (tall) it else it.height(64.dp) }.clip(RoundedCornerShape(12.dp)).border(1.dp, jr.outlineVariant, RoundedCornerShape(12.dp))
         .clickable(onClick = onClick).padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
         GoalRing(minutes / goal.toFloat())
